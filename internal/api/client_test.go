@@ -133,3 +133,56 @@ func TestLoginWorkspaceSelection(t *testing.T) {
 		t.Fatalf("unexpected session: %+v", sess)
 	}
 }
+
+// TestPhase2Resources: SendMessage, MessageAgent, and Mentionables round-trip
+// their payloads correctly.
+func TestPhase2Resources(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/v1/messages", func(w http.ResponseWriter, r *http.Request) {
+		var body struct {
+			ChannelSlug string `json:"channel_slug"`
+			Message     struct {
+				Body string `json:"body"`
+			} `json:"message"`
+		}
+		json.NewDecoder(r.Body).Decode(&body)
+		if body.ChannelSlug != "general" || body.Message.Body != "hi" {
+			t.Errorf("unexpected send payload: %+v", body)
+		}
+		w.WriteHeader(http.StatusCreated)
+		json.NewEncoder(w).Encode(map[string]any{"data": map[string]any{"id": 9, "channel_id": 1, "body": "hi"}})
+	})
+	mux.HandleFunc("POST /api/v1/agents/researcher/message", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusAccepted)
+		json.NewEncoder(w).Encode(map[string]any{
+			"data":       map[string]any{"id": 12, "channel_id": 77, "body": "hello agent"},
+			"channel_id": 77,
+		})
+	})
+	mux.HandleFunc("GET /api/v1/mentionables", func(w http.ResponseWriter, r *http.Request) {
+		json.NewEncoder(w).Encode(map[string]any{"data": []map[string]any{
+			{"type": "user", "id": 1, "name": "Alice"},
+			{"type": "agent", "id": 2, "name": "Researcher", "slug": "researcher"},
+		}})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	client, _ := New(srv.URL, config.Tokens{AccessToken: "t", RefreshToken: "r"})
+	ctx := context.Background()
+
+	msg, err := client.SendMessage(ctx, "general", "hi")
+	if err != nil || msg.ID != 9 {
+		t.Fatalf("SendMessage: %v %+v", err, msg)
+	}
+
+	agentMsg, channelID, err := client.MessageAgent(ctx, "researcher", "hello agent")
+	if err != nil || channelID != 77 || agentMsg.ID != 12 {
+		t.Fatalf("MessageAgent: %v channel=%d %+v", err, channelID, agentMsg)
+	}
+
+	mentionables, err := client.Mentionables(ctx)
+	if err != nil || len(mentionables) != 2 || mentionables[1].Slug != "researcher" {
+		t.Fatalf("Mentionables: %v %+v", err, mentionables)
+	}
+}

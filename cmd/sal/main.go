@@ -14,6 +14,7 @@ import (
 	"errors"
 	"flag"
 	"fmt"
+	"io"
 	"os"
 	"os/signal"
 	"strings"
@@ -49,6 +50,8 @@ func main() {
 		err = runLogout()
 	case "channels":
 		err = runChannels(args)
+	case "send":
+		err = runSend(args)
 	case "tail":
 		err = runTail(args)
 	case "version", "--version", "-v":
@@ -76,6 +79,7 @@ usage:
        --email E       --workspace SLUG   --password-stdin
   sal logout           revoke this device's session
   sal channels         list channels      --json
+  sal send CHANNEL MSG post a message (reads stdin when MSG omitted)
   sal tail CHANNEL     stream a channel's messages to stdout
   sal version
 `)
@@ -290,6 +294,41 @@ func runChannels(args []string) error {
 	return nil
 }
 
+func runSend(args []string) error {
+	if len(args) < 1 {
+		return fmt.Errorf("usage: sal send CHANNEL [MESSAGE]")
+	}
+	slug := args[0]
+
+	var body string
+	if len(args) > 1 {
+		body = strings.Join(args[1:], " ")
+	} else {
+		raw, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			return err
+		}
+		body = strings.TrimSpace(string(raw))
+	}
+	if body == "" {
+		return fmt.Errorf("empty message")
+	}
+
+	_, client, err := session()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := interruptContext()
+	defer cancel()
+
+	msg, err := client.SendMessage(ctx, slug, body)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("sent #%d to %s\n", msg.ID, slug)
+	return nil
+}
+
 func runTail(args []string) error {
 	// Go's flag package stops at the first positional arg, so accept the slug
 	// leading (`sal tail general -n 3`) or trailing (`sal tail -n 3 general`).
@@ -330,9 +369,6 @@ func runTail(args []string) error {
 	if target == nil {
 		return fmt.Errorf("channel %q not found", slug)
 	}
-	if !target.Member {
-		return fmt.Errorf("you are not a member of #%s — live tail needs membership", slug)
-	}
 
 	if *history > 0 {
 		msgs, err := client.Messages(ctx, slug, 1, *history)
@@ -344,15 +380,15 @@ func runTail(args []string) error {
 		}
 	}
 
-	events := make(chan cable.Event, 16)
-	go cable.Run(ctx, cfg.ServerURL, client.AccessToken(), []int64{target.ID}, events)
+	cableClient := cable.NewClient(cfg.ServerURL, client.AccessToken(), []int64{target.ID})
+	go cableClient.Run(ctx)
 
 	fmt.Fprintf(os.Stderr, "── tailing #%s (ctrl+c to stop)\n", slug)
 	for {
 		select {
 		case <-ctx.Done():
 			return nil
-		case ev := <-events:
+		case ev := <-cableClient.Events():
 			switch ev.Type {
 			case cable.EventMessageCreated:
 				printTailMessage(*ev.Message)

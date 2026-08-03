@@ -64,6 +64,75 @@ func (c *Client) Messages(ctx context.Context, channelSlug string, page, perPage
 	return out.Data, nil
 }
 
+// SendMessage posts to a channel (or thread — thread slugs are channel slugs;
+// the server auto-joins the sender to threads).
+func (c *Client) SendMessage(ctx context.Context, channelSlug, body string) (*Message, error) {
+	payload := map[string]any{
+		"channel_slug": channelSlug,
+		"message":      map[string]string{"body": body},
+	}
+	var out struct {
+		Data Message `json:"data"`
+	}
+	if err := c.post(ctx, "/api/v1/messages", payload, &out); err != nil {
+		return nil, err
+	}
+	return &out.Data, nil
+}
+
+type Mentionable struct {
+	Type string `json:"type"` // "user" | "agent"
+	ID   int64  `json:"id"`
+	Name string `json:"name"`
+	Slug string `json:"slug"` // agents only
+}
+
+// Mentionables returns the workspace @-mention directory (members + active
+// agents), fetched once and filtered locally.
+func (c *Client) Mentionables(ctx context.Context) ([]Mentionable, error) {
+	var out struct {
+		Data []Mentionable `json:"data"`
+	}
+	if err := c.get(ctx, "/api/v1/mentionables", nil, &out); err != nil {
+		return nil, err
+	}
+	return out.Data, nil
+}
+
+type Agent struct {
+	ID          int64   `json:"id"`
+	Slug        string  `json:"slug"`
+	Name        string  `json:"name"`
+	Description *string `json:"description"`
+	Status      string  `json:"status"`
+	AvatarColor string  `json:"avatar_color"`
+}
+
+func (c *Client) Agents(ctx context.Context) ([]Agent, error) {
+	q := url.Values{"per_page": {"100"}}
+	var out struct {
+		Data []Agent `json:"data"`
+	}
+	if err := c.get(ctx, "/api/v1/agents", q, &out); err != nil {
+		return nil, err
+	}
+	return out.Data, nil
+}
+
+// MessageAgent sends the first message to an agent, bootstrapping the 1:1
+// agent-DM channel server-side. Returns the message and the DM channel id.
+func (c *Client) MessageAgent(ctx context.Context, agentSlug, content string) (*Message, int64, error) {
+	var out struct {
+		Data      Message `json:"data"`
+		ChannelID int64   `json:"channel_id"`
+	}
+	path := fmt.Sprintf("/api/v1/agents/%s/message", url.PathEscape(agentSlug))
+	if err := c.post(ctx, path, map[string]string{"content": content}, &out); err != nil {
+		return nil, 0, err
+	}
+	return &out.Data, out.ChannelID, nil
+}
+
 type ReadReceipt struct {
 	Slug        string    `json:"slug"`
 	LastReadAt  time.Time `json:"last_read_at"`

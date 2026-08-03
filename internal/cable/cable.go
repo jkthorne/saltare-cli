@@ -13,6 +13,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 
 	"github.com/coder/websocket"
@@ -43,18 +44,74 @@ const (
 	maxBackoff  = 30 * time.Second
 )
 
+// Client owns one cable connection with a dynamic subscription set: Subscribe
+// adds channels at runtime (e.g. opening a thread), and every reconnect
+// resubscribes the full set.
+type Client struct {
+	server string
+	token  string
+	events chan Event
+
+	mu     sync.Mutex
+	ids    map[int64]bool
+	notify chan int64 // ids to subscribe on the live connection
+}
+
+func NewClient(serverURL, accessToken string, channelIDs []int64) *Client {
+	c := &Client{
+		server: serverURL,
+		token:  accessToken,
+		events: make(chan Event, 64),
+		ids:    map[int64]bool{},
+		notify: make(chan int64, 256),
+	}
+	for _, id := range channelIDs {
+		c.ids[id] = true
+	}
+	return c
+}
+
+func (c *Client) Events() <-chan Event { return c.events }
+
+// Subscribe adds a channel to the set. Idempotent and async: on a live
+// connection the subscribe frame goes out immediately; while disconnected the
+// id waits for the next welcome.
+func (c *Client) Subscribe(channelID int64) {
+	c.mu.Lock()
+	already := c.ids[channelID]
+	c.ids[channelID] = true
+	c.mu.Unlock()
+	if already {
+		return
+	}
+	select {
+	case c.notify <- channelID:
+	default: // full buffer: the reconnect resubscribe path covers it
+	}
+}
+
+func (c *Client) snapshotIDs() []int64 {
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	out := make([]int64, 0, len(c.ids))
+	for id := range c.ids {
+		out = append(out, id)
+	}
+	return out
+}
+
 // Run connects and pumps events until ctx is cancelled. It never returns
 // early: connection failures surface as EventDisconnected and it retries.
 // After every EventConnected (including reconnects) the consumer should
 // gap-fill via REST — broadcasts during the outage are lost.
-func Run(ctx context.Context, serverURL, accessToken string, channelIDs []int64, events chan<- Event) {
+func (c *Client) Run(ctx context.Context) {
 	backoff := time.Second
 	for {
-		err := connectOnce(ctx, serverURL, accessToken, channelIDs, events, &backoff)
+		err := c.connectOnce(ctx, &backoff)
 		if ctx.Err() != nil {
 			return
 		}
-		emit(ctx, events, Event{Type: EventDisconnected, Err: err})
+		emit(ctx, c.events, Event{Type: EventDisconnected, Err: err})
 		select {
 		case <-time.After(backoff):
 		case <-ctx.Done():
@@ -66,33 +123,48 @@ func Run(ctx context.Context, serverURL, accessToken string, channelIDs []int64,
 	}
 }
 
-func connectOnce(ctx context.Context, serverURL, accessToken string, channelIDs []int64, events chan<- Event, backoff *time.Duration) error {
-	wsURL, err := websocketURL(serverURL, accessToken)
+func (c *Client) connectOnce(ctx context.Context, backoff *time.Duration) error {
+	wsURL, err := websocketURL(c.server, c.token)
 	if err != nil {
 		return err
 	}
 
 	// Action Cable's request-forgery protection requires a same-origin Origin
 	// header; native sockets don't send one by default, so act like a browser.
-	origin, err := httpOrigin(serverURL)
+	origin, err := httpOrigin(c.server)
 	if err != nil {
 		return err
 	}
 	opts := &websocket.DialOptions{HTTPHeader: http.Header{"Origin": []string{origin}}}
 
 	dialCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-	conn, _, err := websocket.Dial(dialCtx, wsURL, opts)
+	ws, _, err := websocket.Dial(dialCtx, wsURL, opts)
 	cancel()
 	if err != nil {
 		return err
 	}
-	defer conn.Close(websocket.StatusNormalClosure, "")
+	conn := &wsConn{ws: ws}
+	defer ws.Close(websocket.StatusNormalClosure, "")
 	// A feed of chat history can exceed the 32KiB default read limit.
-	conn.SetReadLimit(1 << 20)
+	ws.SetReadLimit(1 << 20)
+
+	// Forward runtime Subscribe calls onto this connection; dies with it.
+	connCtx, connCancel := context.WithCancel(ctx)
+	defer connCancel()
+	go func() {
+		for {
+			select {
+			case <-connCtx.Done():
+				return
+			case id := <-c.notify:
+				_ = conn.subscribe(connCtx, id)
+			}
+		}
+	}()
 
 	for {
 		readCtx, cancel := context.WithTimeout(ctx, readTimeout)
-		_, data, err := conn.Read(readCtx)
+		_, data, err := ws.Read(readCtx)
 		cancel()
 		if err != nil {
 			return err
@@ -109,32 +181,41 @@ func connectOnce(ctx context.Context, serverURL, accessToken string, channelIDs 
 
 		switch frame.Type {
 		case "welcome":
-			for _, id := range channelIDs {
-				if err := subscribe(ctx, conn, id); err != nil {
+			for _, id := range c.snapshotIDs() {
+				if err := conn.subscribe(ctx, id); err != nil {
 					return err
 				}
 			}
 			*backoff = time.Second // healthy connection resets the retry clock
-			emit(ctx, events, Event{Type: EventConnected})
+			emit(ctx, c.events, Event{Type: EventConnected})
 		case "ping", "confirm_subscription", "reject_subscription":
-			// pings feed the read deadline; rejections mean membership was
+			// pings feed the read deadline; rejections mean visibility was
 			// revoked mid-session — the REST layer will surface that.
 		case "disconnect":
 			return fmt.Errorf("server sent disconnect")
 		default:
 			if ev, ok := parseBroadcast(frame.Identifier, frame.Message); ok {
-				emit(ctx, events, ev)
+				emit(ctx, c.events, ev)
 			}
 		}
 	}
 }
 
-func subscribe(ctx context.Context, conn *websocket.Conn, channelID int64) error {
+// wsConn serializes writes — coder/websocket allows one concurrent writer,
+// and both the read loop (welcome) and the notify forwarder send subscribes.
+type wsConn struct {
+	ws *websocket.Conn
+	mu sync.Mutex
+}
+
+func (c *wsConn) subscribe(ctx context.Context, channelID int64) error {
 	identifier, _ := json.Marshal(map[string]any{"channel": "MessagesChannel", "channel_id": channelID})
 	cmd, _ := json.Marshal(map[string]string{"command": "subscribe", "identifier": string(identifier)})
 	writeCtx, cancel := context.WithTimeout(ctx, 5*time.Second)
 	defer cancel()
-	return conn.Write(writeCtx, websocket.MessageText, cmd)
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	return c.ws.Write(writeCtx, websocket.MessageText, cmd)
 }
 
 // parseBroadcast decodes a broadcast frame: identifier is a JSON-encoded

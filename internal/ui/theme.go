@@ -47,6 +47,14 @@ var (
 	styleFeedTitle = lipgloss.NewStyle().Foreground(cIce).Bold(true)
 	styleFeedTopic = lipgloss.NewStyle().Foreground(cSilver)
 	styleErrText   = lipgloss.NewStyle().Foreground(cPhoenix)
+
+	styleAgentStub   = lipgloss.NewStyle().Foreground(cArcDim)
+	styleMentionRow  = lipgloss.NewStyle().Foreground(cMist).Background(cGraphite)
+	styleMentionSel  = lipgloss.NewStyle().Foreground(cArcBright).Background(cSteel).Bold(true)
+	styleComposerBar = lipgloss.NewStyle().Foreground(cChrome)
+	stylePickerTitle = lipgloss.NewStyle().Foreground(cArc).Bold(true)
+	stylePickerRow   = lipgloss.NewStyle().Foreground(cMist)
+	stylePickerSel   = lipgloss.NewStyle().Foreground(cArcBright).Bold(true)
 )
 
 // kindGlyph marks channel kinds in the sidebar. Geometric glyphs only —

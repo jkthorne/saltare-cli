@@ -40,6 +40,21 @@ func (s *Store) SetChannels(channels []api.Channel) {
 
 func (s *Store) Channels() []api.Channel { return s.channels }
 
+// Upsert adds or replaces one channel without touching the rest of the list —
+// used for channels discovered after the initial load (an opened thread, a
+// freshly bootstrapped agent DM).
+func (s *Store) Upsert(c api.Channel) {
+	if i, ok := s.byID[c.ID]; ok {
+		s.channels[i] = c
+		return
+	}
+	s.channels = append(s.channels, c)
+	s.byID[c.ID] = len(s.channels) - 1
+	if _, tracked := s.unread[c.ID]; !tracked {
+		s.unread[c.ID] = c.Unread()
+	}
+}
+
 func (s *Store) Channel(id int64) (api.Channel, bool) {
 	i, ok := s.byID[id]
 	if !ok {

@@ -12,50 +12,97 @@ import (
 
 const sidebarWidth = 28
 
-// sidebarGroups is the render order; kinds not listed are hidden.
-var sidebarGroups = []struct {
-	label string
-	kinds []string
-}{
-	{"CHANNELS", []string{"public_channel", "private_channel"}},
-	{"DIRECT", []string{"dm"}},
-	{"AGENTS", []string{"agent_dm"}},
+// sidebarItem is one selectable row: an actual channel, or an agent with no
+// DM channel yet (first message bootstraps one).
+type sidebarItem struct {
+	channel *api.Channel
+	agent   *api.Agent // set only for channel-less agents
 }
 
-// flattenChannels returns channels in sidebar display order (group order,
-// server order within a group). The selection index addresses this slice.
-func flattenChannels(channels []api.Channel) []api.Channel {
-	var out []api.Channel
-	for _, g := range sidebarGroups {
-		for _, c := range channels {
-			for _, k := range g.kinds {
-				if c.Kind == k {
-					out = append(out, c)
+func (it sidebarItem) isAgentStub() bool { return it.channel == nil }
+
+func (it sidebarItem) channelID() int64 {
+	if it.channel != nil {
+		return it.channel.ID
+	}
+	return 0
+}
+
+func (it sidebarItem) title() string {
+	if it.channel != nil {
+		return it.channel.Name
+	}
+	return it.agent.Name
+}
+
+func (it sidebarItem) glyph() string {
+	if it.channel != nil {
+		return kindGlyph(it.channel.Kind)
+	}
+	return kindGlyph("agent_dm")
+}
+
+func (it sidebarItem) group() string {
+	if it.isAgentStub() {
+		return "AGENTS"
+	}
+	switch it.channel.Kind {
+	case "public_channel", "private_channel":
+		return "CHANNELS"
+	case "dm":
+		return "DIRECT"
+	case "agent_dm":
+		return "AGENTS"
+	default:
+		return "OTHER"
+	}
+}
+
+// buildSidebar merges the channel list with the agent roster: agent-DM
+// channels represent their agent; active agents without one become stubs.
+func buildSidebar(channels []api.Channel, agents []api.Agent) []sidebarItem {
+	var items []sidebarItem
+	agentHasChannel := map[int64]bool{}
+
+	for _, group := range []string{"CHANNELS", "DIRECT", "AGENTS"} {
+		for i := range channels {
+			c := &channels[i]
+			it := sidebarItem{channel: c}
+			if it.group() != group {
+				continue
+			}
+			if c.Kind == "agent_dm" && c.HostType != nil && *c.HostType == "Agent" && c.HostID != nil {
+				agentHasChannel[*c.HostID] = true
+			}
+			items = append(items, it)
+		}
+		if group == "AGENTS" {
+			for i := range agents {
+				a := &agents[i]
+				if a.Status == "active" && !agentHasChannel[a.ID] {
+					items = append(items, sidebarItem{agent: a})
 				}
 			}
 		}
 	}
-	return out
+	return items
 }
 
-func renderSidebar(s *store.Store, workspaceName string, ordered []api.Channel, selected int, focused bool, height int) string {
+func renderSidebar(s *store.Store, workspaceName string, items []sidebarItem, selected int, focused bool, height int) string {
 	var rows []string
 	rows = append(rows, styleSidebarHeader.Render(truncate("◢ "+workspaceName, sidebarWidth-2)))
 	rows = append(rows, "")
 
-	// ordered is already in group order (see flattenChannels); emit a label
-	// whenever the group changes.
 	lastGroup := ""
-	for idx, c := range ordered {
-		group := groupLabel(c.Kind)
-		if group != lastGroup {
+	for idx, it := range items {
+		if g := it.group(); g != lastGroup {
 			if lastGroup != "" {
 				rows = append(rows, "")
 			}
-			rows = append(rows, styleGroupLabel.Render(group))
-			lastGroup = group
+			rows = append(rows, styleGroupLabel.Render(g))
+			lastGroup = g
 		}
-		rows = append(rows, sidebarRow(s, c, idx == selected, focused))
+		rows = append(rows, sidebarRow(s, it, idx == selected, focused))
 	}
 
 	body := strings.Join(rows, "\n")
@@ -63,8 +110,11 @@ func renderSidebar(s *store.Store, workspaceName string, ordered []api.Channel, 
 	return styleSidebarBorder.Render(col)
 }
 
-func sidebarRow(s *store.Store, c api.Channel, selected, focused bool) string {
-	unread := s.Unread(c.ID)
+func sidebarRow(s *store.Store, it sidebarItem, selected, focused bool) string {
+	unread := 0
+	if it.channel != nil {
+		unread = s.Unread(it.channel.ID)
+	}
 
 	marker := "  "
 	if selected {
@@ -77,7 +127,7 @@ func sidebarRow(s *store.Store, c api.Channel, selected, focused bool) string {
 	}
 
 	nameWidth := sidebarWidth - 2 - lipgloss.Width(marker) - lipgloss.Width(badge) - 2
-	name := truncate(kindGlyph(c.Kind)+" "+c.Name, nameWidth)
+	name := truncate(it.glyph()+" "+it.title(), nameWidth)
 
 	style := styleChannelRow
 	switch {
@@ -87,19 +137,10 @@ func sidebarRow(s *store.Store, c api.Channel, selected, focused bool) string {
 		style = styleChannelUnread
 	case selected:
 		style = styleChannelSel.Bold(false)
+	case it.isAgentStub():
+		style = styleAgentStub
 	}
 	return marker + style.Render(name) + badge
-}
-
-func groupLabel(kind string) string {
-	for _, g := range sidebarGroups {
-		for _, k := range g.kinds {
-			if k == kind {
-				return g.label
-			}
-		}
-	}
-	return "OTHER"
 }
 
 func truncate(s string, width int) string {
