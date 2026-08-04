@@ -194,6 +194,8 @@ type TasksOpts struct {
 	State     string
 	Mine      bool
 	ProjectID int64
+	DueBefore string // "2006-01-02", inclusive; excludes undated tasks
+	DueAfter  string // "2006-01-02", inclusive; excludes undated tasks
 }
 
 func (c *Client) Tasks(ctx context.Context, opts TasksOpts) ([]Task, error) {
@@ -206,6 +208,12 @@ func (c *Client) Tasks(ctx context.Context, opts TasksOpts) ([]Task, error) {
 	}
 	if opts.ProjectID > 0 {
 		q.Set("project_id", strconv.FormatInt(opts.ProjectID, 10))
+	}
+	if opts.DueBefore != "" {
+		q.Set("due_before", opts.DueBefore)
+	}
+	if opts.DueAfter != "" {
+		q.Set("due_after", opts.DueAfter)
 	}
 	var out struct {
 		Data []Task `json:"data"`
