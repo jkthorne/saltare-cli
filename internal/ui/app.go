@@ -17,6 +17,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
+	"github.com/jkthorne/saltare/cli/internal/agenda"
 	"github.com/jkthorne/saltare/cli/internal/api"
 	"github.com/jkthorne/saltare/cli/internal/assist"
 	"github.com/jkthorne/saltare/cli/internal/cable"
@@ -74,7 +75,10 @@ type agentMessagedMsg struct {
 	channelID int64
 	message   api.Message
 }
-type tasksLoadedMsg struct{ tasks []api.Task }
+type tasksLoadedMsg struct {
+	gen   int // matched against tasksView.fetchGen — stale responses dropped
+	tasks []api.Task
+}
 type projectsLoadedMsg struct{ projects []api.Project }
 type taskChangedMsg struct{ task api.Task }
 type notificationsLoadedMsg struct{ items []api.Notification }
@@ -292,15 +296,22 @@ func (m Model) fetchThreads(parent api.Channel, rootID int64) tea.Cmd {
 	}
 }
 
+// fetchTasks reads the current mode's filters and generation at call time —
+// callers switching modes must bump m.tasks.fetchGen (as a statement, not in
+// the return — return operands copy m before the call runs).
 func (m Model) fetchTasks() tea.Cmd {
 	client, ctx := m.client, m.ctx
-	mine := m.tasks.mine
+	gen := m.tasks.fetchGen
+	opts := api.TasksOpts{Mine: m.tasks.mine}
+	if m.tasks.agenda {
+		opts = api.TasksOpts{Mine: true, DueBefore: agenda.DueBefore(time.Now(), agenda.WindowDays)}
+	}
 	return func() tea.Msg {
-		tasks, err := client.Tasks(ctx, api.TasksOpts{Mine: mine})
+		tasks, err := client.Tasks(ctx, opts)
 		if err != nil {
 			return softErrMsg{err}
 		}
-		return tasksLoadedMsg{tasks}
+		return tasksLoadedMsg{gen: gen, tasks: tasks}
 	}
 }
 
@@ -547,9 +558,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, m.fetchChannels()
 
 	case tasksLoadedMsg:
+		if msg.gen != m.tasks.fetchGen {
+			return m, nil // a newer fetch (mode switch) is already in flight
+		}
 		m.tasks.loading = false
 		m.tasks.tasks = msg.tasks
-		if m.tasks.sel >= len(msg.tasks) {
+		if m.tasks.agenda {
+			m.tasks.rebuildAgendaRows()
+		} else if m.tasks.sel >= len(msg.tasks) {
 			m.tasks.sel = 0
 		}
 		return m, nil
@@ -559,6 +575,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			changed := msg.task
 			m.tasks.detail = &changed
 		}
+		m.tasks.fetchGen++
 		return m, m.fetchTasks()
 
 	case discussionLoadedMsg:
@@ -573,6 +590,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.tasks.detail = &task
 		if len(m.tasks.tasks) == 0 {
 			m.tasks.loading = true
+			m.tasks.fetchGen++
 			return m, m.fetchTasks()
 		}
 		return m, nil
@@ -1444,11 +1462,16 @@ func (m Model) handleTasksKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case "n":
 		return m, t.openInput()
 	case "m":
+		if t.agenda {
+			return m, nil
+		}
 		t.mine = !t.mine
 		t.loading = true
+		t.fetchGen++
 		return m, m.fetchTasks()
 	case "r":
 		t.loading = true
+		t.fetchGen++
 		return m, m.fetchTasks()
 	}
 	return m, nil
@@ -1613,6 +1636,7 @@ func (m Model) openPalette() (tea.Model, tea.Cmd) {
 		paletteItem{label: "◆ assistant", hint: "local claude session", action: actionAssistant},
 		paletteItem{label: "☑ tasks: mine", action: actionTasksMine},
 		paletteItem{label: "☑ tasks: all open", action: actionTasksAll},
+		paletteItem{label: "☷ agenda: next 7 days", action: actionAgenda},
 		paletteItem{label: "☐ new task…", action: actionNewTask},
 		paletteItem{label: "◉ notifications", action: actionNotifications},
 	)
@@ -1639,12 +1663,24 @@ func (m Model) runPaletteItem(item paletteItem) (tea.Model, tea.Cmd) {
 	case actionTasksMine, actionTasksAll:
 		m.view = viewTasks
 		m.tasks.active = true
+		m.tasks.agenda = false
 		m.tasks.mine = item.action == actionTasksMine
 		m.tasks.loading = true
+		m.tasks.fetchGen++
+		return m, m.fetchTasks()
+	case actionAgenda:
+		m.view = viewTasks
+		m.tasks.active = true
+		m.tasks.agenda = true
+		m.tasks.mine = true
+		m.tasks.detail = nil
+		m.tasks.loading = true
+		m.tasks.fetchGen++
 		return m, m.fetchTasks()
 	case actionNewTask:
 		m.view = viewTasks
 		m.tasks.loading = true
+		m.tasks.fetchGen++
 		return m, tea.Batch(m.fetchTasks(), m.tasks.openInput())
 	case actionNotifications:
 		return m, m.fetchNotifications()
@@ -2471,8 +2507,10 @@ func (m Model) openSearchResult(row searchRow) (tea.Model, tea.Cmd) {
 		m.search.close()
 		m.view = viewTasks
 		m.tasks.active = true
+		m.tasks.agenda = false
 		m.tasks.mine = false
 		m.tasks.loading = true
+		m.tasks.fetchGen++
 		return m, m.fetchTasks()
 	case row.document != nil:
 		return m, m.copyReference(row)

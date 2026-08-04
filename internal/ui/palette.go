@@ -25,6 +25,7 @@ type paletteItem struct {
 const (
 	actionTasksMine     = "tasks_mine"
 	actionTasksAll      = "tasks_all"
+	actionAgenda        = "agenda"
 	actionNewTask       = "new_task"
 	actionNotifications = "notifications"
 	actionAssistant     = "assistant"

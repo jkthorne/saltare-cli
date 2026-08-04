@@ -8,6 +8,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
+	"github.com/jkthorne/saltare/cli/internal/agenda"
 	"github.com/jkthorne/saltare/cli/internal/api"
 )
 
@@ -15,9 +16,13 @@ import (
 type tasksView struct {
 	active  bool
 	mine    bool
+	agenda  bool // day-grouped next-7-days mode; sel indexes rows, not tasks
 	loading bool
 	tasks   []api.Task
 	sel     int
+
+	rows     []agendaRow // agenda mode only: headers + task rows
+	fetchGen int         // stale tasksLoadedMsg responses are dropped
 
 	projects []api.Project
 
@@ -30,6 +35,14 @@ type tasksView struct {
 	pickSel      int
 	pendingTitle string
 }
+
+// agendaRow is one display line of the agenda: a section header or a task.
+type agendaRow struct {
+	header string
+	task   *api.Task
+}
+
+func (r agendaRow) selectable() bool { return r.header == "" }
 
 func newTasksView() tasksView {
 	ti := textinput.New()
@@ -56,6 +69,10 @@ func stateGlyph(state string) string {
 }
 
 func (t *tasksView) move(delta int) {
+	if t.agenda {
+		t.moveAgenda(delta)
+		return
+	}
 	if len(t.tasks) == 0 {
 		return
 	}
@@ -65,11 +82,61 @@ func (t *tasksView) move(delta int) {
 	}
 }
 
+// moveAgenda skips section headers (searchView.move precedent).
+func (t *tasksView) moveAgenda(delta int) {
+	if len(t.rows) == 0 {
+		return
+	}
+	next := t.sel + delta
+	for next >= 0 && next < len(t.rows) && !t.rows[next].selectable() {
+		next += delta
+	}
+	if next >= 0 && next < len(t.rows) {
+		t.sel = next
+	}
+}
+
+// advanceToSelectable nudges sel off a header (used after rebuild).
+func (t *tasksView) advanceToSelectable(delta int) {
+	if t.sel < len(t.rows) && !t.rows[t.sel].selectable() {
+		t.moveAgenda(delta)
+	}
+}
+
 func (t *tasksView) selected() (api.Task, bool) {
+	if t.agenda {
+		if t.sel < len(t.rows) && t.rows[t.sel].task != nil {
+			return *t.rows[t.sel].task, true
+		}
+		return api.Task{}, false
+	}
 	if len(t.tasks) == 0 || t.sel >= len(t.tasks) {
 		return api.Task{}, false
 	}
 	return t.tasks[t.sel], true
+}
+
+// rebuildAgendaRows rederives the display rows from the task list. The
+// grouping drops out-of-window tasks itself, so a stale-mode fetch still
+// renders correctly.
+func (t *tasksView) rebuildAgendaRows() {
+	sections := agenda.Group(t.tasks, time.Now(), agenda.WindowDays)
+	t.rows = t.rows[:0]
+	for _, s := range sections {
+		label := s.Label
+		if s.Date != "" {
+			label += " · " + s.Date
+		}
+		t.rows = append(t.rows, agendaRow{header: label})
+		for i := range s.Tasks {
+			task := s.Tasks[i]
+			t.rows = append(t.rows, agendaRow{task: &task})
+		}
+	}
+	if t.sel >= len(t.rows) {
+		t.sel = 0
+	}
+	t.advanceToSelectable(1)
 }
 
 func (t *tasksView) openInput() tea.Cmd {
@@ -102,8 +169,12 @@ func (t *tasksView) render(r *feedRenderer, width, height int) string {
 	if !t.mine {
 		scope = "all"
 	}
+	title := "☑ tasks — " + scope
+	if t.agenda {
+		title = "☑ agenda — next 7 days"
+	}
 	var rows []string
-	rows = append(rows, stylePickerTitle.Render("☑ tasks — "+scope))
+	rows = append(rows, stylePickerTitle.Render(title))
 	rows = append(rows, "")
 
 	switch {
@@ -122,6 +193,17 @@ func (t *tasksView) render(r *feedRenderer, width, height int) string {
 		rows = append(rows, t.input.View(), "", styleFeedTopic.Render("enter next · esc cancel"))
 	case t.loading:
 		rows = append(rows, styleFeedTopic.Render("loading…"))
+	case t.agenda && len(t.rows) == 0:
+		rows = append(rows, styleFeedTopic.Render("nothing due in the next 7 days"))
+	case t.agenda:
+		today := time.Now().Format("2006-01-02")
+		for i, row := range t.rows {
+			if row.header != "" {
+				rows = append(rows, styleFeedTopic.Render(row.header))
+			} else {
+				rows = append(rows, t.taskRow(*row.task, i == t.sel, today, width))
+			}
+		}
 	case len(t.tasks) == 0:
 		rows = append(rows, styleFeedTopic.Render("nothing here — n creates a task"))
 	default:
@@ -131,7 +213,11 @@ func (t *tasksView) render(r *feedRenderer, width, height int) string {
 		}
 	}
 
-	rows = append(rows, "", styleFeedTopic.Render("j/k move · enter detail · x done/reopen · n new · m mine/all · r refresh · esc chat"))
+	hints := "j/k move · enter detail · x done/reopen · n new · m mine/all · r refresh · esc chat"
+	if t.agenda {
+		hints = "j/k move · enter detail · x done/reopen · n new · r refresh · esc chat"
+	}
+	rows = append(rows, "", styleFeedTopic.Render(hints))
 	body := strings.Join(rows, "\n")
 	return styleTasksPane.Width(width).Height(height).MaxHeight(height).Render(body)
 }
