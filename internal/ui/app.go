@@ -7,6 +7,7 @@ import (
 	"context"
 	"fmt"
 	"strings"
+	"time"
 
 	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
@@ -71,6 +72,13 @@ type projectsLoadedMsg struct{ projects []api.Project }
 type taskChangedMsg struct{ task api.Task }
 type notificationsLoadedMsg struct{ items []api.Notification }
 type notificationsClearedMsg struct{}
+type searchDebounceMsg struct{ gen int }
+type searchResultsMsg struct {
+	gen     int
+	results *api.SearchResults
+	err     error
+}
+type toastClearMsg struct{ gen int }
 type assistEventMsg struct{ ev assistEvent }
 type cableStartedMsg struct{ client *cable.Client }
 type cableEventMsg struct{ ev cable.Event }
@@ -108,6 +116,10 @@ type Model struct {
 	tasks  tasksView
 	notify notifyView
 	assist assistant
+	search searchView
+
+	toast    string
+	toastGen int
 
 	feedSel    int64 // selected message id in the feed (0 = none)
 	feedBlocks []msgBlock
@@ -139,6 +151,7 @@ func NewModel(ctx context.Context, cfg *config.Config, client *api.Client) Model
 		comp:       newComposer(),
 		pal:        newPalette(),
 		tasks:      newTasksView(),
+		search:     newSearchView(),
 		histPages:  map[int64]int{},
 		histDone:   map[int64]bool{},
 	}
@@ -466,6 +479,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.notify.items = nil
 		return m, nil
 
+	case searchDebounceMsg:
+		if m.search.active && msg.gen == m.search.gen {
+			return m, m.runSearch()
+		}
+		return m, nil
+
+	case searchResultsMsg:
+		if !m.search.active || msg.gen != m.search.gen {
+			return m, nil // a newer query superseded this response
+		}
+		if msg.err != nil {
+			m.search.loading = false
+			m.softErr = "search: " + msg.err.Error()
+			return m, nil
+		}
+		m.search.setResults(msg.results)
+		return m, nil
+
+	case toastClearMsg:
+		if msg.gen == m.toastGen {
+			m.toast = ""
+		}
+		return m, nil
+
 	case assistEventMsg:
 		return m.handleAssistEvent(msg.ev)
 
@@ -498,6 +535,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	var cmds []tea.Cmd
 	if m.pal.active {
 		cmds = append(cmds, m.pal.update(msg))
+	} else if m.search.active {
+		cmds = append(cmds, m.updateSearchInput(msg))
 	} else if m.tasks.inputOpen {
 		var cmd tea.Cmd
 		m.tasks.input, cmd = m.tasks.input.Update(msg)
@@ -700,12 +739,17 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, m.fetchNotifications()
 	case "ctrl+g":
 		return m.toggleAssistant()
+	case "ctrl+f":
+		return m.openSearch("", "")
 	case "ctrl+r":
 		return m, tea.Batch(m.fetchChannels(), m.fetchAgents(), m.fetchProjects())
 	}
 
 	if m.pal.active {
 		return m.handlePaletteKey(msg)
+	}
+	if m.search.active {
+		return m.handleSearchKey(msg)
 	}
 	if m.notify.active {
 		return m.handleNotifyKey(key)
@@ -807,6 +851,11 @@ func (m Model) handleFeedKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.threadForSelection()
 	case "o":
 		return m.loadOlder()
+	case "/":
+		if c, ok := m.store.Channel(m.focusedID); ok {
+			return m.openSearch(c.Slug, c.Title())
+		}
+		return m.openSearch("", "")
 	}
 	var cmd tea.Cmd
 	m.vp, cmd = m.vp.Update(msg)
@@ -1048,6 +1097,7 @@ func (m Model) openPalette() (tea.Model, tea.Cmd) {
 		}
 	}
 	items = append(items,
+		paletteItem{label: "⌕ search workspace", action: actionSearch},
 		paletteItem{label: "◆ assistant", hint: "local claude session", action: actionAssistant},
 		paletteItem{label: "☑ tasks: mine", action: actionTasksMine},
 		paletteItem{label: "☑ tasks: all open", action: actionTasksAll},
@@ -1084,6 +1134,8 @@ func (m Model) runPaletteItem(item paletteItem) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.fetchTasks(), m.tasks.openInput())
 	case actionNotifications:
 		return m, m.fetchNotifications()
+	case actionSearch:
+		return m.openSearch("", "")
 	case actionAssistant:
 		if !m.assist.active {
 			return m.toggleAssistant()
@@ -1092,6 +1144,142 @@ func (m Model) runPaletteItem(item paletteItem) (tea.Model, tea.Cmd) {
 		return m, m.comp.focus()
 	}
 	return m, m.focusCmd()
+}
+
+// ── Search ──────────────────────────────────────────────────────────────
+
+const searchDebounce = 300 * time.Millisecond
+
+func (m Model) openSearch(channelSlug, channelName string) (tea.Model, tea.Cmd) {
+	m.pal.close()
+	m.notify.active = false
+	m.threadPicker.active = false
+	m.comp.blur()
+	return m, m.search.open(channelSlug, channelName)
+}
+
+func (m Model) handleSearchKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.search.close()
+		return m, m.focusCmd()
+	case "up":
+		m.search.move(-1)
+		return m, nil
+	case "down":
+		m.search.move(1)
+		return m, nil
+	case "y":
+		if row, ok := m.search.selected(); ok {
+			return m, m.copyReference(row)
+		}
+		return m, nil
+	case "enter":
+		row, ok := m.search.selected()
+		if !ok {
+			return m, nil
+		}
+		return m.openSearchResult(row)
+	}
+	return m, m.updateSearchInput(msg)
+}
+
+// updateSearchInput forwards a message to the query input and re-arms the
+// debounce timer when the text actually changed.
+func (m *Model) updateSearchInput(msg tea.Msg) tea.Cmd {
+	before := m.search.input.Value()
+	var cmd tea.Cmd
+	m.search.input, cmd = m.search.input.Update(msg)
+	if m.search.input.Value() == before {
+		return cmd
+	}
+	m.search.gen++
+	gen := m.search.gen
+	return tea.Batch(cmd, tea.Tick(searchDebounce, func(time.Time) tea.Msg {
+		return searchDebounceMsg{gen}
+	}))
+}
+
+func (m *Model) runSearch() tea.Cmd {
+	query := strings.TrimSpace(m.search.input.Value())
+	if len(query) < 2 {
+		m.search.rows = nil
+		m.search.ran = false
+		return nil
+	}
+	m.search.loading = true
+	client, ctx := m.client, m.ctx
+	gen, channel := m.search.gen, m.search.channel
+	return func() tea.Msg {
+		results, err := client.Search(ctx, query, api.SearchOpts{Channel: channel})
+		return searchResultsMsg{gen: gen, results: results, err: err}
+	}
+}
+
+func (m Model) openSearchResult(row searchRow) (tea.Model, tea.Cmd) {
+	switch {
+	case row.message != nil:
+		hit := row.message
+		m.search.close()
+		m.view = viewChat
+		var next tea.Model = m
+		var cmd tea.Cmd
+		if _, inStore := m.store.Channel(hit.ChannelID); inStore || m.sidebarHas(hit.ChannelID) {
+			next, cmd = m.openChannelByID(hit.ChannelID)
+		} else {
+			// A hit in a channel we never loaded (e.g. a thread): open it
+			// from the search metadata; history fetch fills the feed.
+			next, cmd = m.openThread(api.Channel{
+				ID: hit.ChannelID, Slug: hit.Channel.Slug, Name: hit.Channel.Name, Kind: hit.Channel.Kind,
+			})
+		}
+		if model, ok := next.(Model); ok {
+			model.feedSel = hit.ID // highlights once the page containing it renders
+			return model, cmd
+		}
+		return next, cmd
+	case row.task != nil:
+		m.search.close()
+		m.view = viewTasks
+		m.tasks.active = true
+		m.tasks.mine = false
+		m.tasks.loading = true
+		return m, m.fetchTasks()
+	case row.document != nil:
+		return m, m.copyReference(row)
+	}
+	return m, nil
+}
+
+func (m *Model) sidebarHas(channelID int64) bool {
+	for _, it := range m.items {
+		if it.channel != nil && it.channel.ID == channelID {
+			return true
+		}
+	}
+	return false
+}
+
+// copyReference copies a row's permalink/embed and toasts the outcome.
+func (m *Model) copyReference(row searchRow) tea.Cmd {
+	label, err := m.copyRowReference(row)
+	if err != nil {
+		m.softErr = "copy failed: " + err.Error()
+		return nil
+	}
+	if label == "" {
+		return nil
+	}
+	return m.showToast(label)
+}
+
+func (m *Model) showToast(text string) tea.Cmd {
+	m.toast = text
+	m.toastGen++
+	gen := m.toastGen
+	return tea.Tick(3*time.Second, func(time.Time) tea.Msg {
+		return toastClearMsg{gen}
+	})
 }
 
 func (m Model) openChannelByID(id int64) (tea.Model, tea.Cmd) {
@@ -1431,6 +1619,8 @@ func (m Model) View() string {
 	switch {
 	case m.pal.active:
 		pane = lipgloss.NewStyle().Width(feedWidth).Height(m.height-1).Padding(1, 2).Render(m.pal.render(feedWidth))
+	case m.search.active:
+		pane = m.search.render(feedWidth, m.height-1)
 	case m.notify.active:
 		pane = m.notify.render(feedWidth, m.height-1)
 	case m.view == viewTasks:
@@ -1513,6 +1703,9 @@ func (m Model) statusBar() string {
 	left := conn + styleStatusBar.Render(" "+m.cfg.WorkspaceName+" · saltare cum machina")
 	if m.sending {
 		left += styleStatusBar.Render(" · sending…")
+	}
+	if m.toast != "" {
+		left += styleStatusOK.Render(" · " + truncate(m.toast, 40))
 	}
 	if m.softErr != "" {
 		left += styleStatusDead.Render(" ! " + truncate(m.softErr, 40))

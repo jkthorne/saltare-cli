@@ -55,6 +55,8 @@ func main() {
 		err = runChannels(args)
 	case "send":
 		err = runSend(args)
+	case "search":
+		err = runSearch(args)
 	case "tasks":
 		err = runTasks(args)
 	case "ask":
@@ -88,11 +90,13 @@ usage:
   sal channels         list channels      --json
   sal send CHANNEL MSG post a message (reads stdin when MSG omitted)
   sal tail CHANNEL     stream a channel's messages to stdout
+  sal search QUERY     search messages, tasks, and documents
+                            --type T --channel SLUG --json
   sal tasks            list your open tasks   --all --state S --json
   sal tasks complete SLUG   mark a task completed
   sal tasks add TITLE       create a task     --project SLUG
-  sal ask QUESTION     ask Claude via the workspace inference proxy
-                            --model M (default claude-haiku-4-5)
+  sal ask QUESTION     ask Claude, grounded in your workspace via tools
+                            --model M (default claude-haiku-4-5) --no-tools
   sal version
 `)
 }
@@ -391,6 +395,79 @@ func runSend(args []string) error {
 	}
 	fmt.Printf("sent #%d to %s\n", msg.ID, slug)
 	return nil
+}
+
+func runSearch(args []string) error {
+	fs := flag.NewFlagSet("search", flag.ExitOnError)
+	asJSON := fs.Bool("json", false, "print raw JSON")
+	kind := fs.String("type", "", "restrict to messages, tasks, or documents")
+	channel := fs.String("channel", "", "channel slug to scope message results")
+	limit := fs.Int("limit", 0, "per-type result cap (max 50)")
+	query, err := parseTrailing(fs, args)
+	if err != nil {
+		return err
+	}
+	if query == "" {
+		return fmt.Errorf("usage: sal search QUERY")
+	}
+
+	_, client, err := session()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := interruptContext()
+	defer cancel()
+
+	results, err := client.Search(ctx, query, api.SearchOpts{Type: *kind, Channel: *channel, Limit: *limit})
+	if err != nil {
+		return err
+	}
+
+	if *asJSON {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(results)
+	}
+	for _, m := range results.Messages {
+		body := strings.ReplaceAll(m.Body, "\n", " ")
+		fmt.Printf("msg   #%-14s %-14s %s\n", m.Channel.Slug, m.Sender.Name, body)
+	}
+	for _, t := range results.Tasks {
+		fmt.Printf("task  %-15s %-14s %s\n", t.Slug, t.State, t.Title)
+	}
+	for _, d := range results.Documents {
+		fmt.Printf("doc   %-15s %s\n", d.Slug, d.Title)
+	}
+	if len(results.Messages)+len(results.Tasks)+len(results.Documents) == 0 {
+		fmt.Fprintln(os.Stderr, "no results")
+	}
+	return nil
+}
+
+// parseTrailing parses flags that may appear before or after a positional
+// query (flag.Parse stops at the first positional arg).
+func parseTrailing(fs *flag.FlagSet, args []string) (string, error) {
+	if err := fs.Parse(args); err != nil {
+		return "", err
+	}
+	positional := fs.Args()
+	if len(positional) > 0 && strings.HasPrefix(positional[len(positional)-1], "-") {
+		return "", fmt.Errorf("flags must come before or directly after the query")
+	}
+	var words []string
+	for len(positional) > 0 {
+		words = append(words, positional[0])
+		rest := positional[1:]
+		if len(rest) > 0 && strings.HasPrefix(rest[0], "-") {
+			if err := fs.Parse(rest); err != nil {
+				return "", err
+			}
+			positional = fs.Args()
+			continue
+		}
+		positional = rest
+	}
+	return strings.Join(words, " "), nil
 }
 
 func runTasks(args []string) error {

@@ -42,6 +42,7 @@ var (
 	styleStatusLive  = lipgloss.NewStyle().Foreground(cMateria).Background(cGraphite).Bold(true)
 	styleStatusRetry = lipgloss.NewStyle().Foreground(cLimit).Background(cGraphite).Bold(true)
 	styleStatusDead  = lipgloss.NewStyle().Foreground(cPhoenix).Background(cGraphite).Bold(true)
+	styleStatusOK    = lipgloss.NewStyle().Foreground(cMateria).Background(cGraphite)
 	styleStatusKeys  = lipgloss.NewStyle().Foreground(cSilver).Background(cGraphite)
 
 	styleFeedTitle = lipgloss.NewStyle().Foreground(cIce).Bold(true)
