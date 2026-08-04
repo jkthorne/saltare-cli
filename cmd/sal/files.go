@@ -4,11 +4,11 @@ import (
 	"encoding/json"
 	"flag"
 	"fmt"
-	"io"
 	"os"
-	"path/filepath"
 
 	"github.com/jkthorne/saltare/cli/internal/api"
+	"github.com/jkthorne/saltare/cli/internal/config"
+	"github.com/jkthorne/saltare/cli/internal/tablefmt"
 )
 
 func printJSON(v any) error {
@@ -59,7 +59,7 @@ func runFiles(args []string) error {
 		if u.Category != nil {
 			category = *u.Category
 		}
-		fmt.Printf("%-24s %-12s %8s  %s\n", u.Slug, category, humanSize(u.FileSize), u.Title)
+		fmt.Printf("%-24s %-12s %8s  %s\n", u.Slug, category, tablefmt.HumanSize(u.FileSize), u.Title)
 	}
 	return nil
 }
@@ -90,7 +90,7 @@ func filesPut(args []string) error {
 	if err != nil {
 		return err
 	}
-	fmt.Printf("uploaded %s (%s) — embed with [[upload:%s]]\n", upload.Slug, humanSize(upload.FileSize), upload.Slug)
+	fmt.Printf("uploaded %s (%s) — embed with [[upload:%s]]\n", upload.Slug, tablefmt.HumanSize(upload.FileSize), upload.Slug)
 	fmt.Fprintln(os.Stderr, "· category is computed in the background; sal files will show it shortly")
 	return nil
 }
@@ -133,26 +133,11 @@ func filesGet(args []string) error {
 	}
 	defer body.Close()
 
-	// Write via a temp sibling + rename so an interrupted transfer never
-	// leaves a truncated file under the real name.
-	tmp, err := os.CreateTemp(filepath.Dir(target), filepath.Base(target)+".part-*")
+	written, err := config.SafeWriteFile(target, body)
 	if err != nil {
 		return err
 	}
-	written, err := io.Copy(tmp, body)
-	closeErr := tmp.Close()
-	if err == nil {
-		err = closeErr
-	}
-	if err != nil {
-		os.Remove(tmp.Name())
-		return err
-	}
-	if err := os.Rename(tmp.Name(), target); err != nil {
-		os.Remove(tmp.Name())
-		return err
-	}
-	fmt.Printf("wrote %s (%s)\n", target, humanSize(written))
+	fmt.Printf("wrote %s (%s)\n", target, tablefmt.HumanSize(written))
 	return nil
 }
 
@@ -169,17 +154,4 @@ func filesRm(slug string) error {
 	}
 	fmt.Printf("deleted %s\n", slug)
 	return nil
-}
-
-func humanSize(bytes int64) string {
-	switch {
-	case bytes >= 1<<30:
-		return fmt.Sprintf("%.1f GB", float64(bytes)/(1<<30))
-	case bytes >= 1<<20:
-		return fmt.Sprintf("%.1f MB", float64(bytes)/(1<<20))
-	case bytes >= 1<<10:
-		return fmt.Sprintf("%.1f KB", float64(bytes)/(1<<10))
-	default:
-		return fmt.Sprintf("%d B", bytes)
-	}
 }

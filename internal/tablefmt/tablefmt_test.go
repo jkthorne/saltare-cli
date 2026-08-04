@@ -1,4 +1,4 @@
-package main
+package tablefmt
 
 import (
 	"testing"
@@ -8,7 +8,7 @@ import (
 
 func strPtr(s string) *string { return &s }
 
-func TestFormatRowsOrdersAndRenders(t *testing.T) {
+func TestRecordsOrdersAndRenders(t *testing.T) {
 	columns := []api.DBColumn{
 		{Key: "name", Type: "text"},
 		{Key: "deal_size", Type: "number"},
@@ -20,7 +20,7 @@ func TestFormatRowsOrdersAndRenders(t *testing.T) {
 		{ID: 11, Data: map[string]any{"name": "Globex", "deal_size": 2.5}, Body: strPtr("call notes")},
 	}
 
-	records := formatRows(columns, rows)
+	records := Records(columns, rows)
 
 	wantHeader := []string{"id", "name", "deal_size", "tags", "score", "body"}
 	for i, key := range wantHeader {
@@ -41,8 +41,8 @@ func TestFormatRowsOrdersAndRenders(t *testing.T) {
 	}
 }
 
-func TestFormatRowsOmitsBodyColumnWhenUnused(t *testing.T) {
-	records := formatRows([]api.DBColumn{{Key: "name", Type: "text"}}, []api.DBRow{
+func TestRecordsOmitsBodyColumnWhenUnused(t *testing.T) {
+	records := Records([]api.DBColumn{{Key: "name", Type: "text"}}, []api.DBRow{
 		{ID: 1, Data: map[string]any{"name": "solo"}},
 	})
 	if len(records[0]) != 2 {
@@ -50,11 +50,11 @@ func TestFormatRowsOmitsBodyColumnWhenUnused(t *testing.T) {
 	}
 }
 
-func TestFlattenWhitespace(t *testing.T) {
-	if got := flattenWhitespace("multi\nline\tcell"); got != "multi line cell" {
+func TestFlatten(t *testing.T) {
+	if got := Flatten("multi\nline\tcell"); got != "multi line cell" {
 		t.Fatalf("got %q", got)
 	}
-	if got := flattenWhitespace("untouched"); got != "untouched" {
+	if got := Flatten("untouched"); got != "untouched" {
 		t.Fatalf("got %q", got)
 	}
 }
@@ -68,8 +68,8 @@ func TestHumanSize(t *testing.T) {
 		1536 * 1024: "1.5 MB",
 	}
 	for in, want := range cases {
-		if got := humanSize(in); got != want {
-			t.Fatalf("humanSize(%d) = %q, want %q", in, got, want)
+		if got := HumanSize(in); got != want {
+			t.Fatalf("HumanSize(%d) = %q, want %q", in, got, want)
 		}
 	}
 }

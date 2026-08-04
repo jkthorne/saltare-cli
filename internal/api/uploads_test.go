@@ -2,6 +2,7 @@ package api
 
 import (
 	"context"
+	"encoding/json"
 	"io"
 	"net/http"
 	"net/http/httptest"
@@ -153,6 +154,33 @@ func TestDatabasesAndRows(t *testing.T) {
 	}
 	if rowPages[0] != "2" {
 		t.Fatalf("page param: %v", rowPages)
+	}
+}
+
+func TestUpdateRowDataSendsWholeHash(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("PATCH /api/v1/databases/crm/rows/10", func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			Row struct {
+				Data map[string]any `json:"data"`
+			} `json:"row"`
+		}
+		json.NewDecoder(r.Body).Decode(&payload)
+		if payload.Row.Data["name"] != "Acme" || payload.Row.Data["deal_size"] != "75000" {
+			t.Errorf("data hash: %+v", payload.Row.Data)
+		}
+		w.Write([]byte(`{"data":{"id":10,"position":1,"data":{"name":"Acme","deal_size":75000},"created_at":"2026-08-01T10:00:00Z","updated_at":"2026-08-04T10:00:00Z"}}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	client, _ := New(srv.URL, config.Tokens{AccessToken: "t", RefreshToken: "r"})
+	row, err := client.UpdateRowData(context.Background(), "crm", 10, map[string]any{"name": "Acme", "deal_size": "75000"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if row.Data["deal_size"] != float64(75000) {
+		t.Fatalf("server-coerced response: %+v", row.Data)
 	}
 }
 

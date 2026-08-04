@@ -2,6 +2,8 @@ package api
 
 import (
 	"context"
+	"fmt"
+	"net/http"
 	"net/url"
 	"strconv"
 	"time"
@@ -60,6 +62,21 @@ func (c *Client) Database(ctx context.Context, slug string) (*Database, error) {
 	}
 	path := "/api/v1/databases/" + url.PathEscape(slug)
 	if err := c.get(ctx, path, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out.Data, nil
+}
+
+// UpdateRowData rewrites a row's cell hash. The server replaces `data`
+// wholesale (not a merge) and coerces string values per column type, so
+// callers read-modify-write the full map and may send plain strings.
+func (c *Client) UpdateRowData(ctx context.Context, dbSlug string, rowID int64, data map[string]any) (*DBRow, error) {
+	payload := map[string]any{"row": map[string]any{"data": data}}
+	var out struct {
+		Data DBRow `json:"data"`
+	}
+	path := fmt.Sprintf("/api/v1/databases/%s/rows/%d", url.PathEscape(dbSlug), rowID)
+	if err := c.do(ctx, http.MethodPatch, path, nil, payload, &out); err != nil {
 		return nil, err
 	}
 	return &out.Data, nil

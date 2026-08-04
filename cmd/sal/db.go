@@ -8,6 +8,7 @@ import (
 	"strings"
 
 	"github.com/jkthorne/saltare/cli/internal/api"
+	"github.com/jkthorne/saltare/cli/internal/tablefmt"
 )
 
 func runDB(args []string) error {
@@ -89,7 +90,7 @@ func dbRows(args []string) error {
 		return printJSON(rows)
 	}
 
-	records := formatRows(database.Schema.Columns, rows)
+	records := tablefmt.Records(database.Schema.Columns, rows)
 	if *asCSV {
 		w := csv.NewWriter(os.Stdout)
 		if err := w.WriteAll(records); err != nil {
@@ -100,77 +101,9 @@ func dbRows(args []string) error {
 	}
 	for _, record := range records {
 		for i, cell := range record {
-			record[i] = flattenWhitespace(cell)
+			record[i] = tablefmt.Flatten(cell)
 		}
 		fmt.Println(strings.Join(record, "\t"))
 	}
 	return nil
-}
-
-// formatRows lays a table out as records: a header of column keys (id
-// first, body last when any row carries one) then one record per row.
-// Cells render scalars verbatim and arrays comma-joined; formula columns
-// never appear in row data, so their cells stay empty.
-func formatRows(columns []api.DBColumn, rows []api.DBRow) [][]string {
-	hasBody := false
-	for _, row := range rows {
-		if row.Body != nil && *row.Body != "" {
-			hasBody = true
-			break
-		}
-	}
-
-	header := []string{"id"}
-	for _, col := range columns {
-		header = append(header, col.Key)
-	}
-	if hasBody {
-		header = append(header, "body")
-	}
-
-	records := [][]string{header}
-	for _, row := range rows {
-		record := []string{fmt.Sprintf("%d", row.ID)}
-		for _, col := range columns {
-			record = append(record, renderCell(row.Data[col.Key]))
-		}
-		if hasBody {
-			body := ""
-			if row.Body != nil {
-				body = *row.Body
-			}
-			record = append(record, body)
-		}
-		records = append(records, record)
-	}
-	return records
-}
-
-func renderCell(value any) string {
-	switch v := value.(type) {
-	case nil:
-		return ""
-	case []any:
-		parts := make([]string, len(v))
-		for i, item := range v {
-			parts[i] = fmt.Sprintf("%v", item)
-		}
-		return strings.Join(parts, ",")
-	case float64:
-		// JSON numbers decode as float64; render integers without ".0".
-		if v == float64(int64(v)) {
-			return fmt.Sprintf("%d", int64(v))
-		}
-		return fmt.Sprintf("%v", v)
-	default:
-		return fmt.Sprintf("%v", v)
-	}
-}
-
-// flattenWhitespace keeps TSV rows one-line and tab-safe.
-func flattenWhitespace(s string) string {
-	if !strings.ContainsAny(s, "\t\n\r") {
-		return s
-	}
-	return strings.Join(strings.Fields(s), " ")
 }

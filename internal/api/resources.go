@@ -375,6 +375,7 @@ type SearchResults struct {
 	Messages  []SearchMessage `json:"messages"`
 	Tasks     []Task          `json:"tasks"`
 	Documents []Document      `json:"documents"`
+	Uploads   []Upload        `json:"uploads"`
 }
 
 // Search runs the workspace full-text search. Result types the key lacks a
