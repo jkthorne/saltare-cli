@@ -1,6 +1,8 @@
 package ui
 
 import (
+	"fmt"
+	"sort"
 	"strings"
 
 	"github.com/jkthorne/saltare/cli/internal/api"
@@ -60,19 +62,29 @@ func (a *assistant) render(r *feedRenderer, width int) string {
 		b.WriteString("\n")
 	}
 	for _, turn := range a.turns {
+		text := turn.TextContent()
 		if turn.Role == "user" {
+			if text == "" {
+				continue // tool_result turns render via the tool trace, not as prose
+			}
 			b.WriteString("\n" + styleSenderUser.Render("you") + "\n")
-			b.WriteString(indentPlain(turn.Content, width-4) + "\n")
+			b.WriteString(indentPlain(text, width-4) + "\n")
 			continue
 		}
 		b.WriteString("\n" + styleSenderAgent.Render("◆ claude") + "\n")
+		for _, use := range turn.ToolUses() {
+			b.WriteString(styleFeedTopic.Render("◇ "+toolCallLine(use)) + "\n")
+		}
+		if text == "" {
+			continue
+		}
 		if r.markdown != nil {
-			if out, err := r.markdown.Render(turn.Content); err == nil {
+			if out, err := r.markdown.Render(text); err == nil {
 				b.WriteString(strings.Trim(out, "\n") + "\n")
 				continue
 			}
 		}
-		b.WriteString(indentPlain(turn.Content, width-4) + "\n")
+		b.WriteString(indentPlain(text, width-4) + "\n")
 	}
 	if a.streaming {
 		b.WriteString("\n" + styleSenderAgent.Render("◆ claude") + "\n")
@@ -82,6 +94,20 @@ func (a *assistant) render(r *feedRenderer, width int) string {
 		b.WriteString("\n" + styleFeedTopic.Render(a.usageLine) + "\n")
 	}
 	return b.String()
+}
+
+// toolCallLine compacts a tool_use block to one dim trace line.
+func toolCallLine(use api.ContentBlock) string {
+	args := make([]string, 0, len(use.Input))
+	for k, v := range use.Input {
+		args = append(args, fmt.Sprintf("%s: %v", k, v))
+	}
+	sort.Strings(args)
+	line := use.Name + "(" + strings.Join(args, ", ") + ")"
+	if len(line) > 80 {
+		line = line[:77] + "..."
+	}
+	return line
 }
 
 func indentPlain(s string, width int) string {

@@ -286,6 +286,106 @@ type ReadReceipt struct {
 	UnreadCount int       `json:"unread_count"`
 }
 
+// EditMessage rewrites a message body (author or workspace admin; the
+// server stamps edited_at).
+func (c *Client) EditMessage(ctx context.Context, id int64, body string) (*Message, error) {
+	payload := map[string]any{"message": map[string]string{"body": body}}
+	var out struct {
+		Data Message `json:"data"`
+	}
+	path := fmt.Sprintf("/api/v1/messages/%d", id)
+	if err := c.do(ctx, http.MethodPatch, path, nil, payload, &out); err != nil {
+		return nil, err
+	}
+	return &out.Data, nil
+}
+
+// DeleteMessage permanently removes a message (author or workspace admin).
+func (c *Client) DeleteMessage(ctx context.Context, id int64) error {
+	path := fmt.Sprintf("/api/v1/messages/%d", id)
+	return c.do(ctx, http.MethodDelete, path, nil, nil, nil)
+}
+
+type SearchOpts struct {
+	Type    string // "", "messages", "tasks", or "documents"; empty = all
+	Channel string // channel slug to scope message results
+	Limit   int    // per-type cap (server max 50)
+}
+
+type SearchChannelRef struct {
+	Slug string `json:"slug"`
+	Name string `json:"name"`
+	Kind string `json:"kind"`
+}
+
+// SearchMessage is a message hit plus the channel context needed to jump.
+type SearchMessage struct {
+	Message
+	Channel SearchChannelRef `json:"channel"`
+}
+
+type SearchResults struct {
+	Messages  []SearchMessage `json:"messages"`
+	Tasks     []Task          `json:"tasks"`
+	Documents []Document      `json:"documents"`
+}
+
+// Search runs the workspace full-text search. Result types the key lacks a
+// read scope for come back empty rather than erroring.
+func (c *Client) Search(ctx context.Context, q string, opts SearchOpts) (*SearchResults, error) {
+	query := url.Values{"q": {q}}
+	if opts.Type != "" {
+		query.Set("type", opts.Type)
+	}
+	if opts.Channel != "" {
+		query.Set("channel", opts.Channel)
+	}
+	if opts.Limit > 0 {
+		query.Set("limit", strconv.Itoa(opts.Limit))
+	}
+	var out struct {
+		Data SearchResults `json:"data"`
+	}
+	if err := c.get(ctx, "/api/v1/search", query, &out); err != nil {
+		return nil, err
+	}
+	return &out.Data, nil
+}
+
+// Document mirrors Api::V1::DocumentSerializer. The index omits body; show
+// includes it.
+type Document struct {
+	ID        int64     `json:"id"`
+	Slug      string    `json:"slug"`
+	Title     string    `json:"title"`
+	Body      string    `json:"body"`
+	Published bool      `json:"published"`
+	CreatedAt time.Time `json:"created_at"`
+	UpdatedAt time.Time `json:"updated_at"`
+}
+
+func (c *Client) Documents(ctx context.Context) ([]Document, error) {
+	q := url.Values{"per_page": {"100"}}
+	var out struct {
+		Data []Document `json:"data"`
+	}
+	if err := c.get(ctx, "/api/v1/documents", q, &out); err != nil {
+		return nil, err
+	}
+	return out.Data, nil
+}
+
+func (c *Client) Document(ctx context.Context, slug string) (*Document, error) {
+	var out struct {
+		Data Document `json:"data"`
+	}
+	path := fmt.Sprintf("/api/v1/documents/%s", url.PathEscape(slug))
+	if err := c.get(ctx, path, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out.Data, nil
+}
+
 // MarkRead advances the caller's read cursor; messageID 0 means "now".
 func (c *Client) MarkRead(ctx context.Context, channelSlug string, messageID int64) (*ReadReceipt, error) {
 	var body any

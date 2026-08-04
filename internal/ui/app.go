@@ -287,10 +287,15 @@ func (m *Model) startAssist(question string) tea.Cmd {
 	}
 	stream := func() tea.Msg {
 		go func() {
-			full, usage, err := client.StreamInference(ctx, req, func(d string) {
+			res, err := client.StreamInference(ctx, req, func(d string) {
 				events <- assistEvent{delta: d}
 			})
-			events <- assistEvent{done: true, full: full, usage: usage, err: err}
+			ev := assistEvent{done: true, err: err}
+			if res != nil {
+				ev.full = res.Text
+				ev.usage = &res.Usage
+			}
+			events <- ev
 		}()
 		return nil
 	}

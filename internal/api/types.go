@@ -31,6 +31,8 @@ type Channel struct {
 	ID              int64      `json:"id"`
 	Slug            string     `json:"slug"`
 	Name            string     `json:"name"`
+	DisplayName     string     `json:"display_name"` // viewer-relative; DMs read as the other participant
+	DmPairKey       *string    `json:"dm_pair_key"`
 	Description     *string    `json:"description"`
 	Kind            string     `json:"kind"`
 	Archived        bool       `json:"archived"`
@@ -53,6 +55,15 @@ func (c Channel) Unread() int {
 		return 0
 	}
 	return *c.UnreadCount
+}
+
+// Title is the sidebar/header label: the server's viewer-relative
+// display_name when present, else the stored name (older servers).
+func (c Channel) Title() string {
+	if c.DisplayName != "" {
+		return c.DisplayName
+	}
+	return c.Name
 }
 
 type Workspace struct {

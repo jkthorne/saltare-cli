@@ -533,15 +533,15 @@ func runAsk(args []string) error {
 			{Role: "user", Content: question},
 		},
 	}
-	_, usage, err := client.StreamInference(ctx, req, func(delta string) {
+	res, err := client.StreamInference(ctx, req, func(delta string) {
 		fmt.Print(delta)
 	})
 	fmt.Println()
 	if err != nil {
 		return err
 	}
-	if usage != nil {
-		fmt.Fprintf(os.Stderr, "· %s · %d in → %d out tokens\n", *model, usage.InputTokens, usage.OutputTokens)
+	if res != nil {
+		fmt.Fprintf(os.Stderr, "· %s · %d in → %d out tokens\n", *model, res.Usage.InputTokens, res.Usage.OutputTokens)
 	}
 	return nil
 }
