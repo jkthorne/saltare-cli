@@ -10,7 +10,18 @@ import (
 	"github.com/jkthorne/saltare/cli/internal/config"
 )
 
+// testModel is a model already dropped into chat (the pre-home default most
+// tests assume). Boot-state tests use bootModel instead.
 func testModel(t *testing.T) Model {
+	t.Helper()
+	m := bootModel(t)
+	m.view = viewChat
+	_ = m.comp.focus()
+	return m
+}
+
+// bootModel is the pristine NewModel state: view == viewHome, composer blurred.
+func bootModel(t *testing.T) Model {
 	t.Helper()
 	cfg := &config.Config{ServerURL: "http://example.test", WorkspaceName: "Test", WorkspaceSlug: "test"}
 	client, err := api.New(cfg.ServerURL, config.Tokens{AccessToken: "t", RefreshToken: "r"})

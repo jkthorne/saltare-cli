@@ -45,11 +45,12 @@ const (
 type viewMode int
 
 const (
-	viewChat viewMode = iota
+	viewChat viewMode = iota // the zero value is load-bearing — never reorder
 	viewTasks
 	viewDocs
 	viewFiles
 	viewDB
+	viewHome
 )
 
 // Bubble Tea messages.
@@ -81,6 +82,7 @@ type tasksLoadedMsg struct {
 }
 type projectsLoadedMsg struct{ projects []api.Project }
 type taskChangedMsg struct{ task api.Task }
+type notifCountMsg struct{ count int }
 type notificationsLoadedMsg struct{ items []api.Notification }
 type notificationsClearedMsg struct{}
 type discussionLoadedMsg struct{ channel api.Channel }
@@ -164,6 +166,7 @@ type Model struct {
 	}
 	pal    palette
 	tasks  tasksView
+	home   homeView
 	notify notifyView
 	assist assistant
 	search searchView
@@ -197,7 +200,7 @@ type Model struct {
 }
 
 func NewModel(ctx context.Context, cfg *config.Config, client *api.Client) Model {
-	return Model{
+	m := Model{
 		cfg:        cfg,
 		client:     client,
 		store:      store.New(),
@@ -216,12 +219,20 @@ func NewModel(ctx context.Context, cfg *config.Config, client *api.Client) Model
 		drafts:     config.LoadDrafts(),
 		unreadMark: map[int64]time.Time{},
 	}
+	// Boot lands on home; the composer (focused at construction) blurs until
+	// the user drops into chat.
+	m.view = viewHome
+	m.comp.blur()
+	return m
 }
 
 func (m Model) Init() tea.Cmd {
-	// The composer is already focused (set in newComposer — mutations here on
-	// the value receiver would be discarded); textarea.Blink starts the cursor.
-	return tea.Batch(m.fetchChannels(), m.fetchAgents(), m.fetchMentionables(), m.fetchProjects(), textarea.Blink)
+	// Channels feed home's unread rows (and the chat feed warms behind it),
+	// tasks feed the my-work buckets (gen 0 matches the constructed
+	// fetchGen), and the notification count has its own purpose-built fetch
+	// so it can't pop the ctrl+n overlay.
+	return tea.Batch(m.fetchChannels(), m.fetchAgents(), m.fetchMentionables(), m.fetchProjects(),
+		m.fetchTasks(), m.fetchNotificationCount(), textarea.Blink)
 }
 
 // ── Commands ────────────────────────────────────────────────────────────
@@ -375,6 +386,19 @@ func (m Model) fetchNotifications() tea.Cmd {
 			return softErrMsg{err}
 		}
 		return notificationsLoadedMsg{items}
+	}
+}
+
+// fetchNotificationCount is home's badge fetch — its own message type
+// because notificationsLoadedMsg pops the ctrl+n overlay.
+func (m Model) fetchNotificationCount() tea.Cmd {
+	client, ctx := m.client, m.ctx
+	return func() tea.Msg {
+		items, err := client.Notifications(ctx, true)
+		if err != nil {
+			return softErrMsg{err}
+		}
+		return notifCountMsg{count: len(items)}
 	}
 }
 
@@ -581,6 +605,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case discussionLoadedMsg:
 		m.view = viewChat
 		m.tasks.detail = nil
+		m.tasks.returnHome = false
 		return m.openThread(msg.channel)
 
 	case taskDetailLoadedMsg:
@@ -617,10 +642,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.notify.active = true
 		m.notify.items = msg.items
 		m.notify.sel = 0
+		m.home.notifCount = len(msg.items)
+		m.home.notifLoaded = true
+		return m, nil
+
+	case notifCountMsg:
+		m.home.notifCount = msg.count
+		m.home.notifLoaded = true
 		return m, nil
 
 	case notificationsClearedMsg:
 		m.notify.items = nil
+		m.home.notifCount = 0
 		return m, nil
 
 	case docsLoadedMsg:
@@ -890,7 +923,10 @@ func (m Model) handleChannelsLoaded(msg channelsLoadedMsg) (Model, tea.Cmd) {
 		if open.channel != nil {
 			m.focusedID = open.channel.ID
 			cmds = append(cmds, m.fetchHistory(*open.channel))
-			if open.channel.Member {
+			// On a home-screen boot the markRead is deferred to
+			// leaveHomeToChat — marking here would silently eat the unread
+			// badge while the user is still looking at home.
+			if open.channel.Member && m.view == viewChat {
 				cmds = append(cmds, m.markRead(*open.channel))
 			}
 		}
@@ -1052,6 +1088,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.view == viewDB {
 		return m.handleDBKey(msg)
+	}
+	if m.view == viewHome {
+		return m.handleHomeKey(msg)
 	}
 
 	switch key {
@@ -1376,6 +1415,10 @@ func (m Model) handleTasksKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		switch key {
 		case "esc", "q":
 			t.detail = nil
+			if t.returnHome {
+				t.returnHome = false
+				m.view = viewHome
+			}
 		case "enter", "o":
 			return m.openTaskDiscussion(task)
 		case "x":
@@ -1629,6 +1672,7 @@ func (m Model) openPalette() (tea.Model, tea.Cmd) {
 		}
 	}
 	items = append(items,
+		paletteItem{label: "⌂ home", action: actionHome},
 		paletteItem{label: "⌕ search workspace", action: actionSearch},
 		paletteItem{label: "▤ documents", action: actionDocs},
 		paletteItem{label: "⇱ files", action: actionFiles},
@@ -1668,6 +1712,15 @@ func (m Model) runPaletteItem(item paletteItem) (tea.Model, tea.Cmd) {
 		m.tasks.loading = true
 		m.tasks.fetchGen++
 		return m, m.fetchTasks()
+	case actionHome:
+		m.view = viewHome
+		m.comp.blur()
+		m.tasks.detail = nil
+		m.tasks.agenda = false
+		m.tasks.mine = true
+		m.tasks.loading = true
+		m.tasks.fetchGen++
+		return m, tea.Batch(m.fetchTasks(), m.fetchNotificationCount())
 	case actionAgenda:
 		m.view = viewTasks
 		m.tasks.active = true
@@ -2920,6 +2973,8 @@ func (m Model) View() string {
 		pane = m.files.render(feedWidth, m.height-1)
 	case m.view == viewDB:
 		pane = m.db.render(feedWidth, m.height-1)
+	case m.view == viewHome:
+		pane = m.renderHome(feedWidth, m.height-1)
 	case m.threadPicker.active:
 		pane = m.renderThreadPicker(feedWidth)
 	case m.embedPicker.active:

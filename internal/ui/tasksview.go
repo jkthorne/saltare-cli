@@ -26,7 +26,8 @@ type tasksView struct {
 
 	projects []api.Project
 
-	detail *api.Task // non-nil = detail pane open
+	detail     *api.Task // non-nil = detail pane open
+	returnHome bool      // detail was opened from home — esc returns there
 
 	// New-task flow: title input, then a project pick when several exist.
 	inputOpen    bool

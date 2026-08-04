@@ -23,6 +23,7 @@ type paletteItem struct {
 }
 
 const (
+	actionHome          = "home"
 	actionTasksMine     = "tasks_mine"
 	actionTasksAll      = "tasks_all"
 	actionAgenda        = "agenda"
