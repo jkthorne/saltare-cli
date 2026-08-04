@@ -37,10 +37,13 @@ changelog:
       - "^feat\\(cli\\)"
       - "^fix\\(cli\\)"
 
-# Homebrew tap publishing — uncomment once (1) the jkthorne/homebrew-tap repo
-# exists and (2) the HOMEBREW_TAP_TOKEN secret (PAT with repo scope) is set on
-# this repo. Left disabled so releases work before the tap does: an empty
-# token would fail the whole release, not skip the step.
+# Homebrew tap publishing — intentionally disabled while this repo is
+# PRIVATE: goreleaser writes formulas with public release-asset URLs, which
+# brew's fetcher can't download from a private repo. The live tap
+# (jkthorne/homebrew-tap) instead carries a hand-maintained build-from-source
+# formula over SSH; bump its tag/version per release. Uncomment this (and set
+# the HOMEBREW_TAP_TOKEN secret, a PAT with repo scope) when the repo goes
+# public.
 #
 # brews:
 #   - name: sal

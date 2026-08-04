@@ -20,11 +20,19 @@ assistant** riding the workspace's metered inference proxy.
 
 ## Install
 
-From a GitHub release: grab the `sal_*_<os>_<arch>.tar.gz` for your platform.
-Releases are cut by pushing a `v*` tag (`.github/workflows/release.yml` runs
-goreleaser; config in `cli/.goreleaser.yaml`). Homebrew tap publishing is
-pre-wired but commented out in `.goreleaser.yaml` until the
-`jkthorne/homebrew-tap` repo and `HOMEBREW_TAP_TOKEN` secret exist.
+Homebrew (needs repo access — the tap builds from source over SSH because
+this repo is private):
+
+```sh
+brew tap jkthorne/tap git@github.com:jkthorne/homebrew-tap.git
+brew install sal
+```
+
+Or grab a `sal_*_<os>_<arch>.tar.gz` from a GitHub release. Releases are cut
+by pushing a `v*` tag (`.github/workflows/release.yml` runs goreleaser;
+config in `cli/.goreleaser.yaml`). After tagging, bump `tag`/`version` in the
+tap's `Formula/sal.rb`. When this repo goes public, switch the tap to
+goreleaser's generated binary formulas (block ready in `.goreleaser.yaml`).
 
 From source:
 
