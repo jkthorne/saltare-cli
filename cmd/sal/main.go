@@ -67,6 +67,8 @@ func main() {
 		err = runDB(args)
 	case "tasks":
 		err = runTasks(args)
+	case "agenda":
+		err = runAgenda(args)
 	case "ask":
 		err = runAsk(args)
 	case "tail":
@@ -114,6 +116,7 @@ usage:
   sal tasks show SLUG       print a task's detail
   sal tasks complete SLUG   mark a task completed
   sal tasks add TITLE       create a task     --project SLUG --due YYYY-MM-DD --priority P
+  sal agenda           your next 7 days of tasks, grouped by day   --days N --json
   sal ask QUESTION     ask Claude, grounded in your workspace via tools
                             --model M (default claude-haiku-4-5) --no-tools
   sal version
