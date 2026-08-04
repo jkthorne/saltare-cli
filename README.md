@@ -1,12 +1,14 @@
 # sal — Saltare in your terminal
 
-A Go TUI + CLI client for Saltare: live chat with markdown and @-mentions,
+A Go TUI + CLI client for Saltare: a boot **home dashboard** (unread
+channels + your due work), live chat with markdown and @-mentions,
 threads (browse, reply, or start one from any message), agent DMs, message
 editing, workspace search, **documents read and edited in your $EDITOR**,
-tasks with detail views and discussions, follow-the-`[[embed]]` navigation,
-a command palette, a notifications inbox — and a built-in **Claude
-assistant** that rides the workspace's metered inference proxy and uses
-tools to read and act on your workspace.
+tasks with detail views, discussions, and a day-grouped **agenda**,
+composer file **attach**, follow-the-`[[embed]]` navigation, a command
+palette, a notifications inbox — and a built-in **Claude assistant** that
+rides the workspace's metered inference proxy and uses tools to read and
+act on your workspace.
 
 ```
 ┌ sidebar ──┬ feed ────────────────────────────────┐
@@ -65,6 +67,7 @@ go build -o sal ./cmd/sal
 | `sal tasks show SLUG` | Print a task's detail |
 | `sal tasks complete SLUG` | Mark a task completed |
 | `sal tasks add TITLE` | Create a self-assigned task (`--project SLUG`, `--due YYYY-MM-DD`, `--priority P`) |
+| `sal agenda` | Your next 7 days of tasks grouped by day (`--days N`, `--json`) |
 | `sal files` | List uploads (`--json`, `--category C`, `-q QUERY`) |
 | `sal files put PATH` | Upload a file (`--title T`) — prints the `[[upload:slug]]` embed |
 | `sal files get SLUG` | Download a file (`-o PATH`, `--force`) |
@@ -76,9 +79,20 @@ go build -o sal ./cmd/sal
 
 ## TUI keys
 
-The composer has focus by default — just type. `enter` sends, `ctrl+j` inserts
+**Home**: sal boots into a dashboard — your unread notification count,
+unread channels, and due work (overdue / today / this week). `j/k` move,
+`enter` opens the selected row (a channel, a task's detail, or the
+notifications inbox), `r` refreshes, `esc`/`q` drops into chat; the
+palette's "home" returns any time. The boot channel keeps its unread badge
+while you're on home and gains a `── NEW ──` rule when you enter it.
+
+In chat the composer has focus — just type. `enter` sends, `ctrl+j` inserts
 a newline. Typing `@` opens mention autocomplete (`up/down` pick, `tab`/`enter`
 complete — names insert exactly as MentionExtractionJob matches them).
+`ctrl+y` **attaches a file**: type a path (`~/`, `./`, `/`) and enter
+uploads it, type anything else to live-search existing uploads — enter
+inserts `[[upload:slug]]` at your cursor either way (also on the palette
+as "attach file…").
 
 `tab` cycles composer → sidebar → feed. Sidebar: `j/k` move, `enter` opens.
 Feed focus is **selection mode**: `j/k` moves a message cursor (arc gutter
@@ -113,7 +127,15 @@ after documents:write joined the CLI grant — if sal says re-run
 **Tasks**: `enter` on a task opens its detail (dates, priority, rendered
 description); from there `enter`/`o` drops into the task's **discussion
 channel** (joining you so unread tracking works), `x` completes, `s`
-cycles the state, `y` copies the `[[task:slug]]` embed.
+cycles the state, `y` copies the `[[task:slug]]` embed. The palette's
+**"agenda: next 7 days"** regroups the same pane by day — Overdue /
+Today / Tomorrow / weekday — with the same detail and complete keys
+(server-filtered via the tasks index's `due_before`, so it stays correct
+in big workspaces).
+
+Home, agenda, and attach need no new scopes — an existing `sal login`
+session just works (the first surface expansion since the assistant for
+which that's true).
 
 **Files & data**: the palette opens both as full TUI views. **Files**:
 browse uploads, `d` downloads to your current directory, `u` uploads by
