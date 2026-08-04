@@ -128,14 +128,25 @@ go test ./...    # unit tests (api refresh flow, cable framing, store)
 gofmt -l .       # formatting (CI enforces)
 ```
 
-**tmux + vim-tmux-navigator users**: that config binds `C-h/j/k/l` globally
+**tmux + vim-tmux-navigator users**: that setup binds `C-h/j/k/l` globally
 and only forwards them to whitelisted programs — so sal's `ctrl+k` (palette)
 and `ctrl+j` (newline) silently become pane navigation. Add `sal` to the
-`is_vim` process regex the same way `fzf` is usually whitelisted:
+process regex the way `fzf` is usually whitelisted — and if the navigator is
+loaded as a **TPM plugin**, the plugin re-binds the keys with its own regex
+when TPM initializes, so the whitelist must be declared *after* the
+`run '~/.tmux/plugins/tpm/tpm'` line or it will be silently clobbered:
 
+```tmux
+is_vim_or_sal="ps -o state= -o comm= -t '#{pane_tty}' \
+    | grep -iqE '^[^TXZ ]+ +(\\S+\\/)?g?(view|l?n?vim?x?|fzf|sal)(diff)?$'"
+bind-key -n 'C-h' if-shell "$is_vim_or_sal" 'send-keys C-h' 'select-pane -L'
+bind-key -n 'C-j' if-shell "$is_vim_or_sal" 'send-keys C-j' 'select-pane -D'
+bind-key -n 'C-k' if-shell "$is_vim_or_sal" 'send-keys C-k' 'select-pane -U'
+bind-key -n 'C-l' if-shell "$is_vim_or_sal" 'send-keys C-l' 'select-pane -R'
 ```
-| grep -iqE '^[^TXZ ]+ +(\\S+\\/)?g?(view|l?n?vim?x?|fzf|sal)(diff)?$'
-```
+
+Verify with `tmux list-keys -T root | grep C-k` — the binding must contain
+`sal`.
 
 The TUI is dark-terminal-only for now, matching the NieR HUD design system.
 Tested against the dev server: `bin/rails server`, then
