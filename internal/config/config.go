@@ -23,6 +23,8 @@ type Config struct {
 	// DeviceID is minted once per install; re-logins with the same id revoke
 	// the prior session server-side instead of accumulating sessions.
 	DeviceID string `json:"device_id"`
+	// UserID of the signed-in user — used to self-assign tasks created here.
+	UserID int64 `json:"user_id"`
 }
 
 // Dir returns ~/.config/saltare, creating it if needed. Deliberately not

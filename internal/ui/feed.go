@@ -15,6 +15,19 @@ import (
 // within 5 minutes share one header.
 const groupWindow = 5 * time.Minute
 
+// feedGutter reserves two columns on every feed line so the selection marker
+// doesn't shift the layout when it appears.
+const feedGutter = "  "
+const feedGutterSel = "▌ "
+
+// msgBlock records where one message's lines live in the assembled feed, so
+// selection can highlight and scroll to it.
+type msgBlock struct {
+	ID   int64
+	Line int // first line index in the content
+	Rows int // line count of this message's segment
+}
+
 type feedRenderer struct {
 	width    int
 	markdown *glamour.TermRenderer
@@ -35,10 +48,10 @@ func (r *feedRenderer) Resize(width int) {
 		return
 	}
 	r.width = width
-	// Glamour's dark style indents by 2; wrap inside that so lines fit.
+	// Gutter (2) + glamour's own indent (2) inside the pane width.
 	md, err := glamour.NewTermRenderer(
 		glamour.WithStandardStyle("dark"),
-		glamour.WithWordWrap(width-4),
+		glamour.WithWordWrap(width-6),
 	)
 	if err == nil {
 		r.markdown = md
@@ -46,33 +59,56 @@ func (r *feedRenderer) Resize(width int) {
 	r.cache = map[string]string{} // width changed — rendered lines are stale
 }
 
-// Render lays out a channel's full timeline for the viewport.
-func (r *feedRenderer) Render(msgs []api.Message) string {
+// Render lays out a channel's timeline and reports each message's line span.
+// selectedID > 0 marks that message with a gutter bar.
+func (r *feedRenderer) Render(msgs []api.Message, selectedID int64) (string, []msgBlock) {
 	var b strings.Builder
+	var blocks []msgBlock
+	line := 0
 	var prev *api.Message
+
+	emit := func(segment string, msgID int64) {
+		gutter := feedGutter
+		if msgID != 0 && msgID == selectedID {
+			gutter = styleSelGutter.Render(feedGutterSel)
+		}
+		rows := 0
+		for _, l := range strings.Split(strings.TrimRight(segment, "\n"), "\n") {
+			b.WriteString(gutter + l + "\n")
+			rows++
+		}
+		if msgID != 0 {
+			blocks = append(blocks, msgBlock{ID: msgID, Line: line, Rows: rows})
+		}
+		line += rows
+	}
+
 	for i := range msgs {
 		m := &msgs[i]
 		if m.ArchivedAt != nil {
 			continue
 		}
 		if prev == nil || !sameDay(prev.CreatedAt, m.CreatedAt) {
-			b.WriteString(r.dateSeparator(m.CreatedAt))
+			emit(r.dateSeparator(m.CreatedAt), 0)
 		}
 		if m.IsSystemEvent() {
-			b.WriteString(r.systemEvent(m))
+			emit(r.systemEvent(m), m.ID)
 			prev = m
 			continue
 		}
+		var segment strings.Builder
 		if needsHeader(prev, m) {
-			b.WriteString(r.header(m))
+			segment.WriteString(r.header(m))
 		}
-		b.WriteString(r.body(m))
+		segment.WriteString(r.body(m))
+		emit(segment.String(), m.ID)
 		prev = m
 	}
+
 	if b.Len() == 0 {
-		return styleFeedTopic.Render("no messages yet")
+		return styleFeedTopic.Render("no messages yet"), nil
 	}
-	return b.String()
+	return b.String(), blocks
 }
 
 func needsHeader(prev, m *api.Message) bool {
@@ -112,7 +148,7 @@ func (r *feedRenderer) body(m *api.Message) string {
 		}
 	}
 	if out == "" {
-		out = lipgloss.NewStyle().Width(r.width-2).Render(text) + "\n"
+		out = lipgloss.NewStyle().Width(r.width-4).Render(text) + "\n"
 	}
 	if m.EditedAt != nil {
 		out = strings.TrimRight(out, "\n") + " " + styleEditedTag.Render("(edited)") + "\n"
@@ -133,7 +169,7 @@ func (r *feedRenderer) systemEvent(m *api.Message) string {
 
 func (r *feedRenderer) dateSeparator(t time.Time) string {
 	label := " " + t.Local().Format("Mon, Jan 2") + " "
-	pad := r.width - lipgloss.Width(label) - 2
+	pad := r.width - lipgloss.Width(label) - 4
 	if pad < 2 {
 		pad = 2
 	}

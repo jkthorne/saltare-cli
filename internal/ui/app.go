@@ -1,5 +1,6 @@
-// Package ui is the Bubble Tea TUI. Phase 2: sidebar (channels + agents),
-// live feed, composer with @-mention autocomplete, thread browsing, agent DMs.
+// Package ui is the Bubble Tea TUI. Phase 3: chat (composer, mentions,
+// threads, agent DMs) plus a tasks pane, command palette, message selection
+// with reply-in-thread, and a notifications overlay.
 package ui
 
 import (
@@ -33,6 +34,13 @@ const (
 	focusFeed
 )
 
+type viewMode int
+
+const (
+	viewChat viewMode = iota
+	viewTasks
+)
+
 // Bubble Tea messages.
 type channelsLoadedMsg struct{ channels []api.Channel }
 type agentsLoadedMsg struct{ agents []api.Agent }
@@ -44,16 +52,22 @@ type historyLoadedMsg struct {
 type threadsLoadedMsg struct {
 	parentID int64
 	threads  []api.Channel
+	rootID   int64 // >0: resolve the thread for this message instead of picking
 }
 type sentMsg struct {
-	channelID int64
+	channelID int64 // channel the send targeted
 	message   api.Message
-	inThread  bool
 }
 type agentMessagedMsg struct {
 	channelID int64
 	message   api.Message
 }
+type tasksLoadedMsg struct{ tasks []api.Task }
+type projectsLoadedMsg struct{ projects []api.Project }
+type taskChangedMsg struct{ task api.Task }
+type notificationsLoadedMsg struct{ items []api.Notification }
+type notificationsClearedMsg struct{}
+type cableStartedMsg struct{ client *cable.Client }
 type cableEventMsg struct{ ev cable.Event }
 type markedReadMsg struct{ channelID int64 }
 type fatalErrMsg struct{ err error }
@@ -73,16 +87,24 @@ type Model struct {
 	agents   []api.Agent
 	selected int
 	focus    focusZone
+	view     viewMode
 
-	focusedID    int64      // channel whose feed is shown (0 while agent stub)
-	pendingAgent *api.Agent // composing the first DM to this agent
-	threadReturn int64      // parent channel to return to on esc (0 = not in thread)
+	focusedID    int64
+	pendingAgent *api.Agent
+	threadReturn int64
+	replyTo      *api.Message // composing a reply-in-thread to this message
 
 	threadPicker struct {
 		active  bool
 		threads []api.Channel
 		sel     int
 	}
+	pal    palette
+	tasks  tasksView
+	notify notifyView
+
+	feedSel    int64 // selected message id in the feed (0 = none)
+	feedBlocks []msgBlock
 
 	conn       connState
 	width      int
@@ -107,11 +129,13 @@ func NewModel(ctx context.Context, cfg *config.Config, client *api.Client) Model
 		loadingMsg: "connecting to " + cfg.ServerURL + " …",
 		renderer:   newFeedRenderer(80),
 		comp:       newComposer(),
+		pal:        newPalette(),
+		tasks:      newTasksView(),
 	}
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(m.fetchChannels(), m.fetchAgents(), m.fetchMentionables(), m.comp.focus())
+	return tea.Batch(m.fetchChannels(), m.fetchAgents(), m.fetchMentionables(), m.fetchProjects(), m.comp.focus())
 }
 
 // ── Commands ────────────────────────────────────────────────────────────
@@ -132,7 +156,7 @@ func (m Model) fetchAgents() tea.Cmd {
 	return func() tea.Msg {
 		agents, err := client.Agents(ctx)
 		if err != nil {
-			return softErrMsg{err} // agents:read may be missing; sidebar still works
+			return softErrMsg{err}
 		}
 		return agentsLoadedMsg{agents}
 	}
@@ -149,6 +173,17 @@ func (m Model) fetchMentionables() tea.Cmd {
 	}
 }
 
+func (m Model) fetchProjects() tea.Cmd {
+	client, ctx := m.client, m.ctx
+	return func() tea.Msg {
+		projects, err := client.Projects(ctx)
+		if err != nil {
+			return softErrMsg{err}
+		}
+		return projectsLoadedMsg{projects}
+	}
+}
+
 func (m Model) fetchHistory(c api.Channel) tea.Cmd {
 	client, ctx := m.client, m.ctx
 	return func() tea.Msg {
@@ -160,14 +195,73 @@ func (m Model) fetchHistory(c api.Channel) tea.Cmd {
 	}
 }
 
-func (m Model) fetchThreads(parent api.Channel) tea.Cmd {
+func (m Model) fetchThreads(parent api.Channel, rootID int64) tea.Cmd {
 	client, ctx := m.client, m.ctx
 	return func() tea.Msg {
 		threads, err := client.Channels(ctx, api.ChannelsOpts{ParentChannelSlug: parent.Slug})
 		if err != nil {
 			return softErrMsg{err}
 		}
-		return threadsLoadedMsg{parentID: parent.ID, threads: threads}
+		return threadsLoadedMsg{parentID: parent.ID, threads: threads, rootID: rootID}
+	}
+}
+
+func (m Model) fetchTasks() tea.Cmd {
+	client, ctx := m.client, m.ctx
+	mine := m.tasks.mine
+	return func() tea.Msg {
+		tasks, err := client.Tasks(ctx, api.TasksOpts{Mine: mine})
+		if err != nil {
+			return softErrMsg{err}
+		}
+		return tasksLoadedMsg{tasks}
+	}
+}
+
+func (m Model) toggleTask(task api.Task) tea.Cmd {
+	client, ctx := m.client, m.ctx
+	next := "completed"
+	if task.State == "completed" || task.State == "cancelled" {
+		next = "open"
+	}
+	return func() tea.Msg {
+		updated, err := client.UpdateTaskState(ctx, task.Slug, next)
+		if err != nil {
+			return softErrMsg{err}
+		}
+		return taskChangedMsg{*updated}
+	}
+}
+
+func (m Model) createTask(projectID int64, title string) tea.Cmd {
+	client, ctx, userID := m.client, m.ctx, m.cfg.UserID
+	return func() tea.Msg {
+		task, err := client.CreateTask(ctx, projectID, title, userID)
+		if err != nil {
+			return softErrMsg{err}
+		}
+		return taskChangedMsg{*task}
+	}
+}
+
+func (m Model) fetchNotifications() tea.Cmd {
+	client, ctx := m.client, m.ctx
+	return func() tea.Msg {
+		items, err := client.Notifications(ctx, true)
+		if err != nil {
+			return softErrMsg{err}
+		}
+		return notificationsLoadedMsg{items}
+	}
+}
+
+func (m Model) readAllNotifications() tea.Cmd {
+	client, ctx := m.client, m.ctx
+	return func() tea.Msg {
+		if _, err := client.ReadAllNotifications(ctx); err != nil {
+			return softErrMsg{err}
+		}
+		return notificationsClearedMsg{}
 	}
 }
 
@@ -181,15 +275,20 @@ func (m Model) markRead(c api.Channel) tea.Cmd {
 	}
 }
 
-func (m Model) sendToChannel(c api.Channel, body string) tea.Cmd {
+func (m Model) sendToChannel(c api.Channel, body string, replyTo int64) tea.Cmd {
 	client, ctx := m.client, m.ctx
-	inThread := c.Kind == "thread"
 	return func() tea.Msg {
-		msg, err := client.SendMessage(ctx, c.Slug, body)
+		var msg *api.Message
+		var err error
+		if replyTo > 0 {
+			msg, err = client.SendReply(ctx, c.Slug, body, replyTo)
+		} else {
+			msg, err = client.SendMessage(ctx, c.Slug, body)
+		}
 		if err != nil {
 			return sendFailedMsg{err}
 		}
-		return sentMsg{channelID: c.ID, message: *msg, inThread: inThread}
+		return sentMsg{channelID: c.ID, message: *msg}
 	}
 }
 
@@ -212,8 +311,6 @@ func (m Model) startCable(channelIDs []int64) tea.Cmd {
 		return cableStartedMsg{client}
 	}
 }
-
-type cableStartedMsg struct{ client *cable.Client }
 
 func (m Model) waitEvent() tea.Cmd {
 	if m.cable == nil {
@@ -255,6 +352,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.comp.mentionables = msg.mentionables
 		return m, nil
 
+	case projectsLoadedMsg:
+		m.tasks.projects = msg.projects
+		return m, nil
+
 	case historyLoadedMsg:
 		m.store.MergeHistory(msg.channelID, msg.messages)
 		if msg.channelID == m.focusedID {
@@ -263,12 +364,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case threadsLoadedMsg:
-		if c, ok := m.store.Channel(m.focusedID); ok && c.ID == msg.parentID {
-			m.threadPicker.active = true
-			m.threadPicker.threads = msg.threads
-			m.threadPicker.sel = 0
-		}
-		return m, nil
+		return m.handleThreadsLoaded(msg)
 
 	case sentMsg:
 		return m.handleSent(msg)
@@ -283,8 +379,28 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 			m.cable.Subscribe(msg.channelID)
 		}
 		m.refreshFeed(true)
-		// Reload channels so the fresh DM channel gets its full record.
 		return m, m.fetchChannels()
+
+	case tasksLoadedMsg:
+		m.tasks.loading = false
+		m.tasks.tasks = msg.tasks
+		if m.tasks.sel >= len(msg.tasks) {
+			m.tasks.sel = 0
+		}
+		return m, nil
+
+	case taskChangedMsg:
+		return m, m.fetchTasks()
+
+	case notificationsLoadedMsg:
+		m.notify.active = true
+		m.notify.items = msg.items
+		m.notify.sel = 0
+		return m, nil
+
+	case notificationsClearedMsg:
+		m.notify.items = nil
+		return m, nil
 
 	case cableStartedMsg:
 		m.cable = msg.client
@@ -311,12 +427,18 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, tea.Quit
 	}
 
-	// Cursor blink and other component messages flow to the composer.
-	if m.focus == focusComposer {
-		cmd := m.comp.update(msg)
-		return m, cmd
+	// Cursor blink and other component messages.
+	var cmds []tea.Cmd
+	if m.pal.active {
+		cmds = append(cmds, m.pal.update(msg))
+	} else if m.tasks.inputOpen {
+		var cmd tea.Cmd
+		m.tasks.input, cmd = m.tasks.input.Update(msg)
+		cmds = append(cmds, cmd)
+	} else if m.focus == focusComposer {
+		cmds = append(cmds, m.comp.update(msg))
 	}
-	return m, nil
+	return m, tea.Batch(cmds...)
 }
 
 func (m Model) handleChannelsLoaded(msg channelsLoadedMsg) (Model, tea.Cmd) {
@@ -342,7 +464,6 @@ func (m Model) handleChannelsLoaded(msg channelsLoadedMsg) (Model, tea.Cmd) {
 		}
 	}
 
-	// Subscribe to every visible channel — MessagesChannel is policy-gated.
 	var ids []int64
 	for _, c := range msg.channels {
 		ids = append(ids, c.ID)
@@ -359,16 +480,60 @@ func (m Model) handleChannelsLoaded(msg channelsLoadedMsg) (Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
+func (m Model) handleThreadsLoaded(msg threadsLoadedMsg) (tea.Model, tea.Cmd) {
+	if msg.rootID > 0 {
+		// Resolving `t` on a message: open its thread, or arm reply-mode.
+		for _, t := range msg.threads {
+			if t.RootMessageID != nil && *t.RootMessageID == msg.rootID {
+				return m.openThread(t)
+			}
+		}
+		if root := m.findMessage(msg.rootID); root != nil {
+			m.replyTo = root
+			m.focus = focusComposer
+			m.updatePlaceholder()
+			return m, m.comp.focus()
+		}
+		return m, nil
+	}
+
+	if c, ok := m.store.Channel(m.focusedID); ok && c.ID == msg.parentID {
+		m.threadPicker.active = true
+		m.threadPicker.threads = msg.threads
+		m.threadPicker.sel = 0
+	}
+	return m, nil
+}
+
 func (m Model) handleSent(msg sentMsg) (Model, tea.Cmd) {
 	m.sending = false
 	m.comp.reset()
-	m.store.MergeHistory(msg.channelID, []api.Message{msg.message})
-	if msg.channelID == m.focusedID {
+	wasReply := m.replyTo != nil
+	m.replyTo = nil
+
+	actualChannel := msg.message.ChannelID
+	m.store.MergeHistory(actualChannel, []api.Message{msg.message})
+
+	var cmds []tea.Cmd
+	if wasReply && actualChannel != msg.channelID {
+		// The server routed the reply into a (possibly new) thread — resolve
+		// and open it via the thread list.
+		if m.cable != nil {
+			m.cable.Subscribe(actualChannel)
+		}
+		if parent, ok := m.store.Channel(msg.channelID); ok {
+			rootID := int64(0)
+			if msg.message.ThreadRootMessageID != nil {
+				rootID = *msg.message.ThreadRootMessageID
+			}
+			cmds = append(cmds, m.fetchThreads(parent, rootID))
+		}
+	} else if actualChannel == m.focusedID {
 		m.refreshFeed(true)
 	}
-	var cmds []tea.Cmd
-	if c, ok := m.store.Channel(msg.channelID); ok {
-		if msg.inThread && !c.Member {
+
+	if c, ok := m.store.Channel(actualChannel); ok {
+		if c.Kind == "thread" && !c.Member {
 			c.Member = true // the server auto-joined us on post
 			m.store.Upsert(c)
 		}
@@ -376,6 +541,7 @@ func (m Model) handleSent(msg sentMsg) (Model, tea.Cmd) {
 			cmds = append(cmds, m.markRead(c))
 		}
 	}
+	m.updatePlaceholder()
 	return m, tea.Batch(cmds...)
 }
 
@@ -384,12 +550,28 @@ func (m Model) handleSent(msg sentMsg) (Model, tea.Cmd) {
 func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	key := msg.String()
 
-	// Always-available controls.
 	switch key {
 	case "ctrl+c":
 		return m, tea.Quit
+	case "ctrl+k":
+		return m.openPalette()
+	case "ctrl+n":
+		return m, m.fetchNotifications()
 	case "ctrl+r":
-		return m, tea.Batch(m.fetchChannels(), m.fetchAgents())
+		return m, tea.Batch(m.fetchChannels(), m.fetchAgents(), m.fetchProjects())
+	}
+
+	if m.pal.active {
+		return m.handlePaletteKey(msg)
+	}
+	if m.notify.active {
+		return m.handleNotifyKey(key)
+	}
+	if m.view == viewTasks {
+		return m.handleTasksKey(msg)
+	}
+
+	switch key {
 	case "pgup", "pgdown":
 		var cmd tea.Cmd
 		m.vp, cmd = m.vp.Update(msg)
@@ -418,15 +600,7 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	case focusSidebar:
 		return m.handleSidebarKey(key)
 	case focusFeed:
-		switch key {
-		case "q":
-			return m, tea.Quit
-		case "t":
-			return m.openThreadPicker()
-		}
-		var cmd tea.Cmd
-		m.vp, cmd = m.vp.Update(msg)
-		return m, cmd
+		return m.handleFeedKey(msg)
 	default:
 		return m.handleComposerKey(msg)
 	}
@@ -468,6 +642,161 @@ func (m Model) handleSidebarKey(key string) (tea.Model, tea.Cmd) {
 	return m, nil
 }
 
+// handleFeedKey is selection mode: j/k moves a message cursor, t opens or
+// starts the selected message's thread.
+func (m Model) handleFeedKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "q":
+		return m, tea.Quit
+	case "j", "down":
+		m.moveFeedSel(1)
+		return m, nil
+	case "k", "up":
+		m.moveFeedSel(-1)
+		return m, nil
+	case "g":
+		m.vp.GotoTop()
+		return m, nil
+	case "G":
+		m.vp.GotoBottom()
+		return m, nil
+	case "t":
+		return m.threadForSelection()
+	}
+	var cmd tea.Cmd
+	m.vp, cmd = m.vp.Update(msg)
+	return m, cmd
+}
+
+func (m Model) handleTasksKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	t := &m.tasks
+	key := msg.String()
+
+	if t.inputOpen && t.pickOpen {
+		switch key {
+		case "esc":
+			t.closeInput()
+		case "j", "down":
+			if t.pickSel < len(t.projects)-1 {
+				t.pickSel++
+			}
+		case "k", "up":
+			if t.pickSel > 0 {
+				t.pickSel--
+			}
+		case "enter":
+			project := t.projects[t.pickSel]
+			title := t.pendingTitle
+			t.closeInput()
+			return m, m.createTask(project.ID, title)
+		}
+		return m, nil
+	}
+
+	if t.inputOpen {
+		switch key {
+		case "esc":
+			t.closeInput()
+			return m, nil
+		case "enter":
+			title := strings.TrimSpace(t.input.Value())
+			if title == "" {
+				return m, nil
+			}
+			switch len(t.projects) {
+			case 0:
+				t.closeInput()
+				m.softErr = "no projects yet — create one on the web first"
+				return m, nil
+			case 1:
+				t.closeInput()
+				return m, m.createTask(t.projects[0].ID, title)
+			default:
+				t.pendingTitle = title
+				t.pickOpen = true
+				t.pickSel = 0
+				return m, nil
+			}
+		}
+		var cmd tea.Cmd
+		t.input, cmd = t.input.Update(msg)
+		return m, cmd
+	}
+
+	switch key {
+	case "esc", "q":
+		m.view = viewChat
+		m.focus = focusComposer
+		return m, m.comp.focus()
+	case "j", "down":
+		t.move(1)
+	case "k", "up":
+		t.move(-1)
+	case "x", "enter":
+		if task, ok := t.selected(); ok {
+			return m, m.toggleTask(task)
+		}
+	case "n":
+		return m, t.openInput()
+	case "m":
+		t.mine = !t.mine
+		t.loading = true
+		return m, m.fetchTasks()
+	case "r":
+		t.loading = true
+		return m, m.fetchTasks()
+	}
+	return m, nil
+}
+
+func (m Model) handlePaletteKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	switch msg.String() {
+	case "esc":
+		m.pal.close()
+		return m, m.focusCmd()
+	case "up":
+		m.pal.move(-1)
+		return m, nil
+	case "down":
+		m.pal.move(1)
+		return m, nil
+	case "enter":
+		item, ok := m.pal.selected()
+		m.pal.close()
+		if !ok {
+			return m, m.focusCmd()
+		}
+		return m.runPaletteItem(item)
+	}
+	return m, m.pal.update(msg)
+}
+
+func (m Model) handleNotifyKey(key string) (tea.Model, tea.Cmd) {
+	switch key {
+	case "esc", "q":
+		m.notify.active = false
+		return m, m.focusCmd()
+	case "j", "down":
+		m.notify.move(1)
+	case "k", "up":
+		m.notify.move(-1)
+	case "R":
+		return m, m.readAllNotifications()
+	case "enter":
+		item, ok := m.notify.selected()
+		if !ok || item.Message == nil {
+			return m, nil
+		}
+		m.notify.active = false
+		m.view = viewChat
+		if _, ok := m.store.Channel(item.Message.ChannelID); ok {
+			return m.openChannelByID(item.Message.ChannelID)
+		}
+		m.softErr = "channel not loaded — refresh (ctrl+r) and retry"
+	}
+	return m, nil
+}
+
 func (m Model) handlePickerKey(key string) (tea.Model, tea.Cmd) {
 	p := &m.threadPicker
 	switch key {
@@ -498,6 +827,17 @@ func (m Model) handleEsc() (tea.Model, tea.Cmd) {
 		m.comp.closeMention()
 		return m, nil
 	}
+	if m.replyTo != nil {
+		m.replyTo = nil
+		m.updatePlaceholder()
+		return m, nil
+	}
+	if m.focus == focusFeed && m.feedSel != 0 {
+		m.feedSel = 0
+		m.refreshFeed(false)
+		m.focus = focusComposer
+		return m, m.focusCmd()
+	}
 	if m.threadReturn != 0 {
 		return m.returnFromThread()
 	}
@@ -510,6 +850,12 @@ func (m Model) handleEsc() (tea.Model, tea.Cmd) {
 
 func (m *Model) cycleFocus() {
 	m.focus = (m.focus + 1) % 3
+	if m.focus == focusFeed {
+		m.selectLastMessage()
+	} else {
+		m.feedSel = 0
+		m.refreshFeed(false)
+	}
 }
 
 func (m *Model) focusCmd() tea.Cmd {
@@ -518,6 +864,80 @@ func (m *Model) focusCmd() tea.Cmd {
 	}
 	m.comp.blur()
 	return nil
+}
+
+// ── Palette ─────────────────────────────────────────────────────────────
+
+func (m Model) openPalette() (tea.Model, tea.Cmd) {
+	var items []paletteItem
+	for _, it := range m.items {
+		switch {
+		case it.channel != nil:
+			items = append(items, paletteItem{
+				label:     kindGlyph(it.channel.Kind) + " " + it.channel.Name,
+				action:    "channel",
+				channelID: it.channel.ID,
+			})
+		case it.agent != nil:
+			items = append(items, paletteItem{
+				label:  "◇ " + it.agent.Name,
+				hint:   "agent DM",
+				action: "agent",
+				agent:  it.agent,
+			})
+		}
+	}
+	items = append(items,
+		paletteItem{label: "☑ tasks: mine", action: actionTasksMine},
+		paletteItem{label: "☑ tasks: all open", action: actionTasksAll},
+		paletteItem{label: "☐ new task…", action: actionNewTask},
+		paletteItem{label: "◉ notifications", action: actionNotifications},
+	)
+	m.comp.blur()
+	return m, m.pal.open(items)
+}
+
+func (m Model) runPaletteItem(item paletteItem) (tea.Model, tea.Cmd) {
+	switch item.action {
+	case "channel":
+		m.view = viewChat
+		return m.openChannelByID(item.channelID)
+	case "agent":
+		m.view = viewChat
+		m.pendingAgent = item.agent
+		m.focusedID = 0
+		m.threadReturn = 0
+		m.refreshFeed(true)
+		m.updatePlaceholder()
+		m.focus = focusComposer
+		return m, m.comp.focus()
+	case actionTasksMine, actionTasksAll:
+		m.view = viewTasks
+		m.tasks.active = true
+		m.tasks.mine = item.action == actionTasksMine
+		m.tasks.loading = true
+		return m, m.fetchTasks()
+	case actionNewTask:
+		m.view = viewTasks
+		m.tasks.loading = true
+		return m, tea.Batch(m.fetchTasks(), m.tasks.openInput())
+	case actionNotifications:
+		return m, m.fetchNotifications()
+	}
+	return m, m.focusCmd()
+}
+
+func (m Model) openChannelByID(id int64) (tea.Model, tea.Cmd) {
+	for i, it := range m.items {
+		if it.channel != nil && it.channel.ID == id {
+			m.selected = i
+			return m.openSelected(true)
+		}
+	}
+	if c, ok := m.store.Channel(id); ok { // thread or non-sidebar channel
+		return m.openThread(c)
+	}
+	return m, nil
 }
 
 // ── Navigation ──────────────────────────────────────────────────────────
@@ -534,6 +954,8 @@ func (m Model) moveSelection(delta int) (tea.Model, tea.Cmd) {
 func (m Model) openSelected(focusComposerAfter bool) (tea.Model, tea.Cmd) {
 	it := m.items[m.selected]
 	m.threadReturn = 0
+	m.replyTo = nil
+	m.feedSel = 0
 
 	var cmds []tea.Cmd
 	if it.isAgentStub() {
@@ -562,20 +984,27 @@ func (m Model) openThreadPicker() (tea.Model, tea.Cmd) {
 	if !ok || c.Kind == "thread" {
 		return m, nil
 	}
-	return m, m.fetchThreads(c)
+	return m, m.fetchThreads(c, 0)
 }
 
 func (m Model) openThread(thread api.Channel) (tea.Model, tea.Cmd) {
-	m.threadReturn = m.focusedID
+	if thread.Kind == "thread" && thread.ParentChannelID != nil {
+		m.threadReturn = *thread.ParentChannelID
+	} else {
+		m.threadReturn = 0
+	}
 	m.store.Upsert(thread)
 	m.focusedID = thread.ID
 	m.pendingAgent = nil
+	m.replyTo = nil
+	m.feedSel = 0
 	m.refreshFeed(true)
 	if m.cable != nil {
 		m.cable.Subscribe(thread.ID)
 	}
 	m.updatePlaceholder()
-	cmds := []tea.Cmd{m.fetchHistory(thread)}
+	m.focus = focusComposer
+	cmds := []tea.Cmd{m.fetchHistory(thread), m.comp.focus()}
 	if thread.Member {
 		cmds = append(cmds, m.markRead(thread))
 	}
@@ -585,6 +1014,7 @@ func (m Model) openThread(thread api.Channel) (tea.Model, tea.Cmd) {
 func (m Model) returnFromThread() (tea.Model, tea.Cmd) {
 	parentID := m.threadReturn
 	m.threadReturn = 0
+	m.feedSel = 0
 	if c, ok := m.store.Channel(parentID); ok {
 		m.focusedID = c.ID
 		m.refreshFeed(true)
@@ -593,6 +1023,83 @@ func (m Model) returnFromThread() (tea.Model, tea.Cmd) {
 	}
 	m.updatePlaceholder()
 	return m, nil
+}
+
+// ── Feed selection ──────────────────────────────────────────────────────
+
+func (m *Model) selectLastMessage() {
+	msgs := m.store.Messages(m.focusedID)
+	if len(msgs) == 0 {
+		m.feedSel = 0
+		return
+	}
+	m.feedSel = msgs[len(msgs)-1].ID
+	m.refreshFeed(false)
+	m.scrollToSelection()
+}
+
+func (m *Model) moveFeedSel(delta int) {
+	if len(m.feedBlocks) == 0 {
+		return
+	}
+	idx := -1
+	for i, b := range m.feedBlocks {
+		if b.ID == m.feedSel {
+			idx = i
+			break
+		}
+	}
+	if idx == -1 {
+		idx = len(m.feedBlocks) - 1
+	} else {
+		idx += delta
+		if idx < 0 {
+			idx = 0
+		}
+		if idx >= len(m.feedBlocks) {
+			idx = len(m.feedBlocks) - 1
+		}
+	}
+	m.feedSel = m.feedBlocks[idx].ID
+	m.refreshFeed(false)
+	m.scrollToSelection()
+}
+
+func (m *Model) scrollToSelection() {
+	for _, b := range m.feedBlocks {
+		if b.ID != m.feedSel {
+			continue
+		}
+		if b.Line < m.vp.YOffset {
+			m.vp.SetYOffset(b.Line)
+		} else if end := b.Line + b.Rows; end > m.vp.YOffset+m.vp.Height {
+			m.vp.SetYOffset(end - m.vp.Height)
+		}
+		return
+	}
+}
+
+func (m Model) findMessage(id int64) *api.Message {
+	msgs := m.store.Messages(m.focusedID)
+	for i := range msgs {
+		if msgs[i].ID == id {
+			return &msgs[i]
+		}
+	}
+	return nil
+}
+
+// threadForSelection opens the selected message's thread if one exists, or
+// arms reply-in-new-thread mode.
+func (m Model) threadForSelection() (tea.Model, tea.Cmd) {
+	if m.feedSel == 0 {
+		return m, nil
+	}
+	c, ok := m.store.Channel(m.focusedID)
+	if !ok || c.Kind == "thread" {
+		return m, nil // no nested threads
+	}
+	return m, m.fetchThreads(c, m.feedSel)
 }
 
 // ── Sending ─────────────────────────────────────────────────────────────
@@ -609,7 +1116,11 @@ func (m Model) send() (tea.Model, tea.Cmd) {
 	}
 	if c, ok := m.store.Channel(m.focusedID); ok {
 		m.sending = true
-		return m, m.sendToChannel(c, body)
+		replyTo := int64(0)
+		if m.replyTo != nil {
+			replyTo = m.replyTo.ID
+		}
+		return m, m.sendToChannel(c, body, replyTo)
 	}
 	return m, nil
 }
@@ -624,7 +1135,6 @@ func (m Model) handleCable(ev cable.Event) (tea.Model, tea.Cmd) {
 		reconnected := m.conn == connRetrying
 		m.conn = connLive
 		if reconnected {
-			// Broadcasts during the outage are lost — refetch the world.
 			cmds = append(cmds, m.fetchChannels())
 			if c, ok := m.store.Channel(m.focusedID); ok {
 				cmds = append(cmds, m.fetchHistory(c))
@@ -656,6 +1166,12 @@ func (m *Model) rebuildSidebar() {
 
 func (m *Model) updatePlaceholder() {
 	switch {
+	case m.replyTo != nil:
+		who := m.replyTo.Sender.Name
+		if who == "" {
+			who = "message"
+		}
+		m.comp.setPlaceholder("reply in thread to " + who + " — esc cancels")
 	case m.pendingAgent != nil:
 		m.comp.setPlaceholder("message ◇ " + m.pendingAgent.Name + " — first message opens the DM")
 	default:
@@ -670,7 +1186,6 @@ func (m *Model) layout() {
 	if feedWidth < 20 {
 		feedWidth = 20
 	}
-	// title + composer rule + composer + popup + status bar
 	feedHeight := m.height - 3 - m.comp.height() - m.comp.popupHeight()
 	if feedHeight < 3 {
 		feedHeight = 3
@@ -692,7 +1207,9 @@ func (m *Model) refreshFeed(jump bool) {
 		m.vp.SetContent(styleFeedTopic.Render("no conversation yet — say hello to " + m.pendingAgent.Name))
 		return
 	}
-	m.vp.SetContent(m.renderer.Render(m.store.Messages(m.focusedID)))
+	content, blocks := m.renderer.Render(m.store.Messages(m.focusedID), m.feedSel)
+	m.feedBlocks = blocks
+	m.vp.SetContent(content)
 	if jump || wasAtBottom {
 		m.vp.GotoBottom()
 	}
@@ -710,9 +1227,16 @@ func (m Model) View() string {
 
 	feedWidth := m.width - sidebarWidth - 1
 	var pane string
-	if m.threadPicker.active {
+	switch {
+	case m.pal.active:
+		pane = lipgloss.NewStyle().Width(feedWidth).Height(m.height-1).Padding(1, 2).Render(m.pal.render(feedWidth))
+	case m.notify.active:
+		pane = m.notify.render(feedWidth, m.height-1)
+	case m.view == viewTasks:
+		pane = m.tasks.render(feedWidth, m.height-1)
+	case m.threadPicker.active:
 		pane = m.renderThreadPicker(feedWidth)
-	} else {
+	default:
 		pane = m.renderFeedPane(feedWidth)
 	}
 
@@ -761,11 +1285,10 @@ func (m Model) renderThreadPicker(width int) string {
 	for i, t := range m.threadPicker.threads {
 		row := fmt.Sprintf("↳ %s  ·  %d msgs", t.Name, t.MessagesCount)
 		if i == m.threadPicker.sel {
-			row = stylePickerSel.Render("▸ " + truncate(row, width-4))
+			rows = append(rows, stylePickerSel.Render("▸ "+truncate(row, width-4)))
 		} else {
-			row = stylePickerRow.Render("  " + truncate(row, width-4))
+			rows = append(rows, stylePickerRow.Render("  "+truncate(row, width-4)))
 		}
-		rows = append(rows, row)
 	}
 	rows = append(rows, "", styleFeedTopic.Render("enter open · esc close"))
 	body := strings.Join(rows, "\n")
@@ -790,7 +1313,7 @@ func (m Model) statusBar() string {
 	if m.softErr != "" {
 		left += styleStatusDead.Render(" ! " + truncate(m.softErr, 40))
 	}
-	keys := styleStatusKeys.Render("tab focus · ctrl+t threads · enter send · ctrl+c quit ")
+	keys := styleStatusKeys.Render("ctrl+k palette · ctrl+n inbox · ctrl+t threads · ctrl+c quit ")
 
 	gap := m.width - lipgloss.Width(left) - lipgloss.Width(keys)
 	if gap < 1 {

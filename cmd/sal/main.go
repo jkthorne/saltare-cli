@@ -52,6 +52,8 @@ func main() {
 		err = runChannels(args)
 	case "send":
 		err = runSend(args)
+	case "tasks":
+		err = runTasks(args)
 	case "tail":
 		err = runTail(args)
 	case "version", "--version", "-v":
@@ -81,6 +83,9 @@ usage:
   sal channels         list channels      --json
   sal send CHANNEL MSG post a message (reads stdin when MSG omitted)
   sal tail CHANNEL     stream a channel's messages to stdout
+  sal tasks            list your open tasks   --all --state S --json
+  sal tasks complete SLUG   mark a task completed
+  sal tasks add TITLE       create a task     --project SLUG
   sal version
 `)
 }
@@ -217,6 +222,7 @@ func runLogin(args []string) error {
 		WorkspaceName: sess.Workspace.Name,
 		Email:         sess.User.Email,
 		DeviceID:      deviceID,
+		UserID:        sess.User.ID,
 	}
 	if err := cfg.Save(); err != nil {
 		return err
@@ -326,6 +332,116 @@ func runSend(args []string) error {
 		return err
 	}
 	fmt.Printf("sent #%d to %s\n", msg.ID, slug)
+	return nil
+}
+
+func runTasks(args []string) error {
+	if len(args) > 0 {
+		switch args[0] {
+		case "complete":
+			if len(args) != 2 {
+				return fmt.Errorf("usage: sal tasks complete SLUG")
+			}
+			return taskComplete(args[1])
+		case "add":
+			return taskAdd(args[1:])
+		}
+	}
+
+	fs := flag.NewFlagSet("tasks", flag.ExitOnError)
+	all := fs.Bool("all", false, "everyone's tasks, not just yours")
+	state := fs.String("state", "", "filter by state (open, in_progress, waiting, completed, cancelled)")
+	asJSON := fs.Bool("json", false, "print raw JSON")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	_, client, err := session()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := interruptContext()
+	defer cancel()
+
+	tasks, err := client.Tasks(ctx, api.TasksOpts{Mine: !*all, State: *state})
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(tasks)
+	}
+	for _, t := range tasks {
+		due := ""
+		if t.DueDate != nil {
+			due = "  due " + *t.DueDate
+		}
+		fmt.Printf("%-12s %-24s %s%s\n", t.State, t.Slug, t.Title, due)
+	}
+	return nil
+}
+
+func taskComplete(slug string) error {
+	_, client, err := session()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := interruptContext()
+	defer cancel()
+
+	task, err := client.UpdateTaskState(ctx, slug, "completed")
+	if err != nil {
+		return err
+	}
+	fmt.Printf("completed: %s\n", task.Title)
+	return nil
+}
+
+func taskAdd(args []string) error {
+	fs := flag.NewFlagSet("tasks add", flag.ExitOnError)
+	projectSlug := fs.String("project", "", "project slug (defaults to the only/first project)")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	title := strings.TrimSpace(strings.Join(fs.Args(), " "))
+	if title == "" {
+		return fmt.Errorf("usage: sal tasks add TITLE [--project SLUG]")
+	}
+
+	cfg, client, err := session()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := interruptContext()
+	defer cancel()
+
+	projects, err := client.Projects(ctx)
+	if err != nil {
+		return err
+	}
+	if len(projects) == 0 {
+		return fmt.Errorf("no projects in this workspace — create one on the web first")
+	}
+	project := projects[0]
+	if *projectSlug != "" {
+		found := false
+		for _, p := range projects {
+			if p.Slug == *projectSlug {
+				project, found = p, true
+				break
+			}
+		}
+		if !found {
+			return fmt.Errorf("project %q not found", *projectSlug)
+		}
+	}
+
+	task, err := client.CreateTask(ctx, project.ID, title, cfg.UserID)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("created %s in %s: %s\n", task.Slug, project.Name, task.Title)
 	return nil
 }
 

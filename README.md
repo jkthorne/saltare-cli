@@ -1,9 +1,9 @@
 # sal — Saltare in your terminal
 
-A Go TUI + CLI client for Saltare. Phase 2 is **full chat**: live feed with
-markdown, a composer with @-mention autocomplete, thread browsing and replies,
-and agent DMs straight from the sidebar. Tasks and the command palette arrive
-in later phases.
+A Go TUI + CLI client for Saltare. Phase 3 covers **chat + work**: live feed
+with markdown, composer with @-mention autocomplete, threads (browse, reply,
+or start one from any message), agent DMs, a tasks pane, a command palette,
+and a notifications inbox.
 
 ```
 ┌ sidebar ──┬ feed ────────────────────────────────┐
@@ -37,6 +37,9 @@ go build -o sal ./cmd/sal
 | `sal channels` | List channels (`--json` for scripts, `--kind` to filter) |
 | `sal send CHANNEL [MSG]` | Post a message (reads stdin when MSG omitted) |
 | `sal tail CHANNEL` | Stream a channel's messages to stdout (`-n` recent history first) |
+| `sal tasks` | List your open tasks (`--all`, `--state S`, `--json`) |
+| `sal tasks complete SLUG` | Mark a task completed |
+| `sal tasks add TITLE` | Create a self-assigned task (`--project SLUG`) |
 | `sal version` | Print the version |
 
 ## TUI keys
@@ -46,9 +49,20 @@ a newline. Typing `@` opens mention autocomplete (`up/down` pick, `tab`/`enter`
 complete — names insert exactly as MentionExtractionJob matches them).
 
 `tab` cycles composer → sidebar → feed. Sidebar: `j/k` move, `enter` opens.
-Feed: `j/k` scroll, `t` opens the thread picker. `ctrl+t` opens threads from
-anywhere; inside a thread `esc` returns to the parent channel. `pgup/pgdn`
-scroll from any focus. `ctrl+r` refresh · `ctrl+c` quit.
+Feed focus is **selection mode**: `j/k` moves a message cursor (arc gutter
+bar); `t` opens the selected message's thread, or arms *reply-in-new-thread*
+if it has none — your reply creates the thread and the view follows it.
+`ctrl+t` opens the thread picker; inside a thread `esc` returns to the parent.
+`pgup/pgdn` scroll from any focus. `ctrl+r` refresh · `ctrl+c` quit.
+
+`ctrl+k` opens the **command palette**: fuzzy-jump to any channel or agent, or
+run actions (tasks views, new task, notifications). `ctrl+n` opens the
+**notifications inbox** — `enter` jumps to the channel, `R` marks all read.
+
+The **tasks pane** (via palette): `j/k` move, `x`/`enter` complete or reopen,
+`n` new task (title, then a project pick when several exist — tasks created
+here are self-assigned), `m` toggles mine/all, `esc` back to chat. Overdue
+tasks glow phoenix-red.
 
 Agents appear in the sidebar even before you've talked to them (dimmed);
 sending the first message bootstraps the 1:1 DM channel server-side and the

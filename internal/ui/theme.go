@@ -48,6 +48,10 @@ var (
 	styleFeedTopic = lipgloss.NewStyle().Foreground(cSilver)
 	styleErrText   = lipgloss.NewStyle().Foreground(cPhoenix)
 
+	styleSelGutter   = lipgloss.NewStyle().Foreground(cArc)
+	styleTasksPane   = lipgloss.NewStyle().Padding(1, 2)
+	styleTaskOverdue = lipgloss.NewStyle().Foreground(cPhoenix).Bold(true)
+	styleTaskDone    = lipgloss.NewStyle().Foreground(cChrome).Strikethrough(true)
 	styleAgentStub   = lipgloss.NewStyle().Foreground(cArcDim)
 	styleMentionRow  = lipgloss.NewStyle().Foreground(cMist).Background(cGraphite)
 	styleMentionSel  = lipgloss.NewStyle().Foreground(cArcBright).Background(cSteel).Bold(true)
