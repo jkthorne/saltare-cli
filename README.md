@@ -2,9 +2,11 @@
 
 A Go TUI + CLI client for Saltare: live chat with markdown and @-mentions,
 threads (browse, reply, or start one from any message), agent DMs, message
-editing, workspace search, a tasks pane, a command palette, a notifications
-inbox — and a built-in **Claude assistant** that rides the workspace's
-metered inference proxy and uses tools to read and act on your workspace.
+editing, workspace search, **documents read and edited in your $EDITOR**,
+tasks with detail views and discussions, follow-the-`[[embed]]` navigation,
+a command palette, a notifications inbox — and a built-in **Claude
+assistant** that rides the workspace's metered inference proxy and uses
+tools to read and act on your workspace.
 
 ```
 ┌ sidebar ──┬ feed ────────────────────────────────┐
@@ -55,9 +57,14 @@ go build -o sal ./cmd/sal
 | `sal send CHANNEL [MSG]` | Post a message (reads stdin when MSG omitted) |
 | `sal tail CHANNEL` | Stream a channel's messages to stdout (`-n` recent history first) |
 | `sal search QUERY` | Search messages, tasks, and documents (`--type`, `--channel SLUG`, `--json`) |
+| `sal docs` | List documents (`--json`) |
+| `sal docs cat SLUG` | Print a document — rendered on a TTY, raw markdown when piped (`--raw`) |
+| `sal docs edit SLUG` | Edit a document in `$EDITOR`; conflicts 409 instead of clobbering (`--force`) |
+| `sal docs new TITLE` | Create a document (`--body-file PATH`, `-` = stdin) |
 | `sal tasks` | List your open tasks (`--all`, `--state S`, `--json`) |
+| `sal tasks show SLUG` | Print a task's detail |
 | `sal tasks complete SLUG` | Mark a task completed |
-| `sal tasks add TITLE` | Create a self-assigned task (`--project SLUG`) |
+| `sal tasks add TITLE` | Create a self-assigned task (`--project SLUG`, `--due YYYY-MM-DD`, `--priority P`) |
 | `sal ask QUESTION` | Claude answer streamed to stdout, grounded via workspace tools (`--model`, `--no-tools`; reads stdin when QUESTION omitted) |
 | `sal version` | Print the version |
 
@@ -82,6 +89,25 @@ thread `esc` returns to the parent. `pgup/pgdn` scroll from any focus.
 mode pre-scopes to the current channel. Results group into messages, tasks,
 and documents — `enter` jumps to a message or the tasks pane, `y` copies a
 permalink or `[[embed]]` reference. Queries debounce as you type.
+
+**Follow references**: `enter` on a selected message follows its
+`[[type:slug]]` embeds — a doc opens the reader, a task its detail pane,
+channels and messages jump there, an agent lands in the DM. Several embeds
+in one message open a picker.
+
+**Documents** (`ctrl+o`): browse, read (glamour-rendered), and edit. `e`
+suspends sal into `$VISUAL`/`$EDITOR` (`vi` fallback); the buffer lives at
+`~/.config/saltare/edit/` so a crashed editor never loses work, and saves
+carry a concurrency guard — if someone edited the doc while you had it
+open, sal shows a conflict prompt instead of overwriting them. `n` creates
+a document and drops straight into your editor. Requires a session minted
+after documents:write joined the CLI grant — if sal says re-run
+`sal login`, do that.
+
+**Tasks**: `enter` on a task opens its detail (dates, priority, rendered
+description); from there `enter`/`o` drops into the task's **discussion
+channel** (joining you so unread tracking works), `x` completes, `s`
+cycles the state, `y` copies the `[[task:slug]]` embed.
 
 Unsent composer text is a **draft**: it survives channel switches, quits,
 and crashes (`~/.config/saltare/drafts.json`) and clears when you send.
@@ -121,8 +147,9 @@ thread auto-joins you to it.
   `~/.config/saltare/credentials.json` (0600) fallback; non-secret settings in
   `~/.config/saltare/config.json`.
 - **REST**: channels (+ per-caller unread state and viewer-relative DM
-  names), messages (post, edit, delete), search, tasks, documents,
-  mark-read.
+  names), messages (post, edit, delete), search, tasks (+ discussion
+  find-or-create), documents (read/write with an optimistic-concurrency
+  guard), mark-read.
 - **Live**: `/cable?access_token=…` with a same-origin `Origin` header
   (Action Cable forgery protection requires one). Subscribes `MessagesChannel`
   per member channel; consumes `message_created` / `message_updated` /
