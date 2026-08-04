@@ -145,19 +145,49 @@ func (c *Client) MessageAgent(ctx context.Context, agentSlug, content string) (*
 // Task mirrors Api::V1::TaskSerializer. Date-only fields stay strings —
 // "2026-08-05" is not RFC3339 and must not go through time.Time.
 type Task struct {
-	ID          int64     `json:"id"`
-	Slug        string    `json:"slug"`
-	Title       string    `json:"title"`
-	Description *string   `json:"description"`
-	State       string    `json:"state"`
-	Priority    *string   `json:"priority"`
-	StartDate   *string   `json:"start_date"`
-	DueDate     *string   `json:"due_date"`
-	DueTime     *string   `json:"due_time"`
-	ProjectID   int64     `json:"project_id"`
-	Assignee    *Sender   `json:"assignee"`
-	CreatedAt   time.Time `json:"created_at"`
-	UpdatedAt   time.Time `json:"updated_at"`
+	ID                    int64      `json:"id"`
+	Slug                  string     `json:"slug"`
+	Title                 string     `json:"title"`
+	Description           *string    `json:"description"`
+	State                 string     `json:"state"`
+	Priority              *string    `json:"priority"`
+	StartDate             *string    `json:"start_date"`
+	DueDate               *string    `json:"due_date"`
+	DueTime               *string    `json:"due_time"`
+	ReminderAt            *time.Time `json:"reminder_at"`
+	ProjectID             int64      `json:"project_id"`
+	ParentTaskID          *int64     `json:"parent_task_id"`
+	SubtasksCount         int        `json:"subtasks_count"`
+	DiscussionChannelSlug *string    `json:"discussion_channel_slug"`
+	CreatorID             int64      `json:"creator_id"`
+	Assignee              *Sender    `json:"assignee"`
+	CreatedAt             time.Time  `json:"created_at"`
+	UpdatedAt             time.Time  `json:"updated_at"`
+}
+
+// Task fetches one task by slug.
+func (c *Client) Task(ctx context.Context, slug string) (*Task, error) {
+	var out struct {
+		Data Task `json:"data"`
+	}
+	path := fmt.Sprintf("/api/v1/tasks/%s", url.PathEscape(slug))
+	if err := c.get(ctx, path, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out.Data, nil
+}
+
+// TaskDiscussion finds-or-creates the task's discussion channel and joins
+// the caller (the server mirrors the web's auto-join-on-view).
+func (c *Client) TaskDiscussion(ctx context.Context, slug string) (*Channel, error) {
+	var out struct {
+		Data Channel `json:"data"`
+	}
+	path := fmt.Sprintf("/api/v1/tasks/%s/discussion", url.PathEscape(slug))
+	if err := c.post(ctx, path, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out.Data, nil
 }
 
 type TasksOpts struct {
@@ -186,12 +216,29 @@ func (c *Client) Tasks(ctx context.Context, opts TasksOpts) ([]Task, error) {
 	return out.Data, nil
 }
 
+// TaskCreateOpts are the optional scheduling fields on task creation; zero
+// values are omitted from the request.
+type TaskCreateOpts struct {
+	DueDate     string // "2026-09-01"
+	Priority    string // none|low|medium|high|urgent
+	Description string
+}
+
 // CreateTask makes a task; assigneeUserID > 0 self-assigns it (a task created
 // from a personal CLI belongs on the creator's "mine" list).
-func (c *Client) CreateTask(ctx context.Context, projectID int64, title string, assigneeUserID int64) (*Task, error) {
+func (c *Client) CreateTask(ctx context.Context, projectID int64, title string, assigneeUserID int64, opts TaskCreateOpts) (*Task, error) {
 	task := map[string]any{"project_id": projectID, "title": title}
 	if assigneeUserID > 0 {
 		task["assignee"] = map[string]any{"type": "User", "id": assigneeUserID}
+	}
+	if opts.DueDate != "" {
+		task["due_date"] = opts.DueDate
+	}
+	if opts.Priority != "" {
+		task["priority"] = opts.Priority
+	}
+	if opts.Description != "" {
+		task["description"] = opts.Description
 	}
 	payload := map[string]any{"task": task}
 	var out struct {
@@ -380,6 +427,62 @@ func (c *Client) Document(ctx context.Context, slug string) (*Document, error) {
 		Data Document `json:"data"`
 	}
 	path := fmt.Sprintf("/api/v1/documents/%s", url.PathEscape(slug))
+	if err := c.get(ctx, path, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out.Data, nil
+}
+
+// CreateDocument makes a document (the server derives the slug from the title).
+func (c *Client) CreateDocument(ctx context.Context, title, body string) (*Document, error) {
+	payload := map[string]any{"document": map[string]string{"title": title, "body": body}}
+	var out struct {
+		Data Document `json:"data"`
+	}
+	if err := c.post(ctx, "/api/v1/documents", payload, &out); err != nil {
+		return nil, err
+	}
+	return &out.Data, nil
+}
+
+// UpdateDocumentBody rewrites a document's body. baseUpdatedAt (the
+// UpdatedAt from the fetch, zero to skip the guard) makes the server 409
+// with code "stale_document" if the document changed in between — the
+// editor round-trip's protection against clobbering a concurrent edit.
+func (c *Client) UpdateDocumentBody(ctx context.Context, slug, body string, baseUpdatedAt time.Time) (*Document, error) {
+	payload := map[string]any{"document": map[string]string{"body": body}}
+	if !baseUpdatedAt.IsZero() {
+		payload["base_updated_at"] = baseUpdatedAt.UTC().Format("2006-01-02T15:04:05.000Z07:00")
+	}
+	var out struct {
+		Data Document `json:"data"`
+	}
+	path := fmt.Sprintf("/api/v1/documents/%s", url.PathEscape(slug))
+	if err := c.do(ctx, http.MethodPatch, path, nil, payload, &out); err != nil {
+		return nil, err
+	}
+	return &out.Data, nil
+}
+
+// Channel fetches one channel by slug (discussions and threads are
+// reachable this way even though they're absent from the default index).
+func (c *Client) Channel(ctx context.Context, slug string) (*Channel, error) {
+	var out struct {
+		Data Channel `json:"data"`
+	}
+	path := fmt.Sprintf("/api/v1/channels/%s", url.PathEscape(slug))
+	if err := c.get(ctx, path, nil, &out); err != nil {
+		return nil, err
+	}
+	return &out.Data, nil
+}
+
+// MessageByID fetches one message (embed [[msg:N]] references carry ids).
+func (c *Client) MessageByID(ctx context.Context, id int64) (*Message, error) {
+	var out struct {
+		Data Message `json:"data"`
+	}
+	path := fmt.Sprintf("/api/v1/messages/%d", id)
 	if err := c.get(ctx, path, nil, &out); err != nil {
 		return nil, err
 	}

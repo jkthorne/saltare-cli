@@ -33,6 +33,11 @@ type APIError struct {
 
 func (e *APIError) Error() string {
 	if e.Message != "" {
+		// Scope widenings only reach sessions minted after them — the fix
+		// for a missing scope is always a fresh login.
+		if e.Code == "missing_scope" {
+			return fmt.Sprintf("%s (%s) — this session predates the capability; re-run `sal login`", e.Message, e.Code)
+		}
 		return fmt.Sprintf("%s (%s)", e.Message, e.Code)
 	}
 	return fmt.Sprintf("api error: HTTP %d", e.Status)

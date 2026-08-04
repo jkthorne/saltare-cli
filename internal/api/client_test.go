@@ -8,6 +8,7 @@ import (
 	"net/http/httptest"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jkthorne/saltare/cli/internal/config"
 )
@@ -209,5 +210,107 @@ func TestPhase2Resources(t *testing.T) {
 	mentionables, err := client.Mentionables(ctx)
 	if err != nil || len(mentionables) != 2 || mentionables[1].Slug != "researcher" {
 		t.Fatalf("Mentionables: %v %+v", err, mentionables)
+	}
+}
+
+func TestPhase6ResourceMethods(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("GET /api/v1/tasks/fix-login-abc", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"data":{"id":5,"slug":"fix-login-abc","title":"Fix login","state":"open","project_id":1,"subtasks_count":2,"discussion_channel_slug":"task-fix-login-abc","creator_id":7,"created_at":"2026-08-01T10:00:00Z","updated_at":"2026-08-01T10:00:00Z"}}`))
+	})
+	mux.HandleFunc("POST /api/v1/tasks/fix-login-abc/discussion", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"data":{"id":40,"slug":"task-fix-login-abc","name":"task-fix-login-abc","kind":"discussion","member":true,"created_at":"2026-08-01T10:00:00Z","updated_at":"2026-08-01T10:00:00Z"}}`))
+	})
+	mux.HandleFunc("GET /api/v1/channels/task-fix-login-abc", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"data":{"id":40,"slug":"task-fix-login-abc","name":"task-fix-login-abc","kind":"discussion","created_at":"2026-08-01T10:00:00Z","updated_at":"2026-08-01T10:00:00Z"}}`))
+	})
+	mux.HandleFunc("GET /api/v1/messages/91", func(w http.ResponseWriter, r *http.Request) {
+		w.Write([]byte(`{"data":{"id":91,"channel_id":40,"body":"event","sender":{"type":"User","id":7,"name":"Me"},"system_event":"state_changed","metadata":{"from":"open","to":"in_progress"},"created_at":"2026-08-01T10:00:00Z","updated_at":"2026-08-01T10:00:00Z"}}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	client, _ := New(srv.URL, config.Tokens{AccessToken: "t", RefreshToken: "r"})
+	ctx := context.Background()
+
+	task, err := client.Task(ctx, "fix-login-abc")
+	if err != nil || task.SubtasksCount != 2 || *task.DiscussionChannelSlug != "task-fix-login-abc" {
+		t.Fatalf("Task: %v %+v", err, task)
+	}
+	channel, err := client.TaskDiscussion(ctx, "fix-login-abc")
+	if err != nil || channel.Kind != "discussion" || !channel.Member {
+		t.Fatalf("TaskDiscussion: %v %+v", err, channel)
+	}
+	bySlug, err := client.Channel(ctx, "task-fix-login-abc")
+	if err != nil || bySlug.ID != 40 {
+		t.Fatalf("Channel: %v %+v", err, bySlug)
+	}
+	msg, err := client.MessageByID(ctx, 91)
+	if err != nil || msg.Metadata["to"] != "in_progress" {
+		t.Fatalf("MessageByID: %v %+v", err, msg)
+	}
+}
+
+func TestDocumentWriteMethods(t *testing.T) {
+	var updateCalls int
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/v1/documents", func(w http.ResponseWriter, r *http.Request) {
+		var payload struct {
+			Document map[string]string `json:"document"`
+		}
+		json.NewDecoder(r.Body).Decode(&payload)
+		if payload.Document["title"] != "Notes" {
+			t.Errorf("title: %+v", payload.Document)
+		}
+		w.WriteHeader(http.StatusCreated)
+		w.Write([]byte(`{"data":{"id":3,"slug":"notes","title":"Notes","body":"hi","published":false,"created_at":"2026-08-01T10:00:00Z","updated_at":"2026-08-01T10:00:00Z"}}`))
+	})
+	mux.HandleFunc("PATCH /api/v1/documents/notes", func(w http.ResponseWriter, r *http.Request) {
+		updateCalls++
+		var payload struct {
+			Document      map[string]string `json:"document"`
+			BaseUpdatedAt string            `json:"base_updated_at"`
+		}
+		json.NewDecoder(r.Body).Decode(&payload)
+		if updateCalls == 1 {
+			if payload.BaseUpdatedAt == "" {
+				t.Error("first update must carry base_updated_at")
+			}
+			w.WriteHeader(http.StatusConflict)
+			w.Write([]byte(`{"error":{"code":"stale_document","message":"Document changed since you fetched it."}}`))
+			return
+		}
+		if payload.BaseUpdatedAt != "" {
+			t.Error("forced update must omit base_updated_at")
+		}
+		w.Write([]byte(`{"data":{"id":3,"slug":"notes","title":"Notes","body":"forced","published":false,"created_at":"2026-08-01T10:00:00Z","updated_at":"2026-08-02T10:00:00Z"}}`))
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	client, _ := New(srv.URL, config.Tokens{AccessToken: "t", RefreshToken: "r"})
+	ctx := context.Background()
+
+	doc, err := client.CreateDocument(ctx, "Notes", "hi")
+	if err != nil || doc.Slug != "notes" {
+		t.Fatalf("CreateDocument: %v %+v", err, doc)
+	}
+
+	_, err = client.UpdateDocumentBody(ctx, "notes", "late edit", doc.UpdatedAt)
+	var apiErr *APIError
+	if !errors.As(err, &apiErr) || apiErr.Code != "stale_document" {
+		t.Fatalf("want stale_document conflict, got %v", err)
+	}
+
+	forced, err := client.UpdateDocumentBody(ctx, "notes", "forced", time.Time{})
+	if err != nil || forced.Body != "forced" {
+		t.Fatalf("forced update: %v %+v", err, forced)
+	}
+}
+
+func TestMissingScopeHintsRelogin(t *testing.T) {
+	err := (&APIError{Status: 403, Code: "missing_scope", Message: "Missing required scope"}).Error()
+	if !strings.Contains(err, "re-run `sal login`") {
+		t.Fatalf("missing_scope must hint a re-login: %q", err)
 	}
 }

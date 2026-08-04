@@ -277,7 +277,7 @@ func (m Model) toggleTask(task api.Task) tea.Cmd {
 func (m Model) createTask(projectID int64, title string) tea.Cmd {
 	client, ctx, userID := m.client, m.ctx, m.cfg.UserID
 	return func() tea.Msg {
-		task, err := client.CreateTask(ctx, projectID, title, userID)
+		task, err := client.CreateTask(ctx, projectID, title, userID, api.TaskCreateOpts{})
 		if err != nil {
 			return softErrMsg{err}
 		}

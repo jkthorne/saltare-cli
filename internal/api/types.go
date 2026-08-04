@@ -12,17 +12,18 @@ type Sender struct {
 }
 
 type Message struct {
-	ID                  int64      `json:"id"`
-	ChannelID           int64      `json:"channel_id"`
-	ThreadRootMessageID *int64     `json:"thread_root_message_id"`
-	Body                string     `json:"body"`
-	Sender              Sender     `json:"sender"`
-	EditedAt            *time.Time `json:"edited_at"`
-	PinnedAt            *time.Time `json:"pinned_at"`
-	ArchivedAt          *time.Time `json:"archived_at"`
-	SystemEvent         *string    `json:"system_event"`
-	CreatedAt           time.Time  `json:"created_at"`
-	UpdatedAt           time.Time  `json:"updated_at"`
+	ID                  int64          `json:"id"`
+	ChannelID           int64          `json:"channel_id"`
+	ThreadRootMessageID *int64         `json:"thread_root_message_id"`
+	Body                string         `json:"body"`
+	Sender              Sender         `json:"sender"`
+	EditedAt            *time.Time     `json:"edited_at"`
+	PinnedAt            *time.Time     `json:"pinned_at"`
+	ArchivedAt          *time.Time     `json:"archived_at"`
+	SystemEvent         *string        `json:"system_event"`
+	Metadata            map[string]any `json:"metadata"` // event context; system events only
+	CreatedAt           time.Time      `json:"created_at"`
+	UpdatedAt           time.Time      `json:"updated_at"`
 }
 
 func (m Message) IsSystemEvent() bool { return m.SystemEvent != nil && *m.SystemEvent != "" }

@@ -572,7 +572,7 @@ func taskAdd(args []string) error {
 		}
 	}
 
-	task, err := client.CreateTask(ctx, project.ID, title, cfg.UserID)
+	task, err := client.CreateTask(ctx, project.ID, title, cfg.UserID, api.TaskCreateOpts{})
 	if err != nil {
 		return err
 	}

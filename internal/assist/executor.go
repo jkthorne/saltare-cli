@@ -142,7 +142,7 @@ func (e *Executor) createTask(ctx context.Context, input map[string]any) (any, e
 	if err != nil {
 		return nil, err
 	}
-	task, err := e.Client.CreateTask(ctx, project.ID, title, e.UserID)
+	task, err := e.Client.CreateTask(ctx, project.ID, title, e.UserID, api.TaskCreateOpts{})
 	if err != nil {
 		return nil, err
 	}
