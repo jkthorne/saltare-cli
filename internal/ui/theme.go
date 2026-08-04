@@ -37,6 +37,8 @@ var (
 	styleSystemEvent = lipgloss.NewStyle().Foreground(cSilver).Italic(true)
 	styleDateRule    = lipgloss.NewStyle().Foreground(cChrome)
 	styleDateLabel   = lipgloss.NewStyle().Foreground(cSilver)
+	styleUnreadRule  = lipgloss.NewStyle().Foreground(cLimit)
+	styleUnreadLabel = lipgloss.NewStyle().Foreground(cLimit).Bold(true)
 
 	styleStatusBar   = lipgloss.NewStyle().Foreground(cMist).Background(cGraphite)
 	styleStatusLive  = lipgloss.NewStyle().Foreground(cMateria).Background(cGraphite).Bold(true)

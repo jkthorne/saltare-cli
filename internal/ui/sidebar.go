@@ -30,7 +30,7 @@ func (it sidebarItem) channelID() int64 {
 
 func (it sidebarItem) title() string {
 	if it.channel != nil {
-		return it.channel.Name
+		return it.channel.Title()
 	}
 	return it.agent.Name
 }

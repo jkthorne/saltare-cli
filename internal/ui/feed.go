@@ -74,8 +74,9 @@ func (r *feedRenderer) Resize(width int) {
 }
 
 // Render lays out a channel's timeline and reports each message's line span.
-// selectedID > 0 marks that message with a gutter bar.
-func (r *feedRenderer) Render(msgs []api.Message, selectedID int64) (string, []msgBlock) {
+// selectedID > 0 marks that message with a gutter bar; unreadBeforeID > 0
+// draws the new-messages rule above that message.
+func (r *feedRenderer) Render(msgs []api.Message, selectedID, unreadBeforeID int64) (string, []msgBlock) {
 	var b strings.Builder
 	var blocks []msgBlock
 	line := 0
@@ -104,6 +105,9 @@ func (r *feedRenderer) Render(msgs []api.Message, selectedID int64) (string, []m
 		}
 		if prev == nil || !sameDay(prev.CreatedAt, m.CreatedAt) {
 			emit(r.dateSeparator(m.CreatedAt), 0)
+		}
+		if m.ID == unreadBeforeID {
+			emit(r.unreadSeparator(), 0)
 		}
 		if m.IsSystemEvent() {
 			emit(r.systemEvent(m), m.ID)
@@ -194,6 +198,21 @@ func (r *feedRenderer) dateSeparator(t time.Time) string {
 		styleDateRule.Render(strings.Repeat("─", left)) +
 		styleDateLabel.Render(label) +
 		styleDateRule.Render(strings.Repeat("─", right)) + "\n"
+}
+
+// unreadSeparator is the "── NEW ──" rule above the first message that
+// arrived after the caller's read cursor.
+func (r *feedRenderer) unreadSeparator() string {
+	label := " NEW "
+	pad := r.width - lipgloss.Width(label) - 4
+	if pad < 2 {
+		pad = 2
+	}
+	left := pad / 2
+	right := pad - left
+	return styleUnreadRule.Render(strings.Repeat("─", left)) +
+		styleUnreadLabel.Render(label) +
+		styleUnreadRule.Render(strings.Repeat("─", right)) + "\n"
 }
 
 func sameDay(a, b time.Time) bool {

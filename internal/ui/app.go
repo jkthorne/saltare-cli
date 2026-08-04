@@ -133,6 +133,9 @@ type Model struct {
 	histPages  map[int64]int  // channel id → deepest history page loaded
 	histDone   map[int64]bool // channel id → no older pages remain
 
+	drafts     map[string]string   // "{ws}/{channel-slug}" → unsent composer text
+	unreadMark map[int64]time.Time // read cursor snapshotted at channel open
+
 	conn       connState
 	width      int
 	height     int
@@ -161,6 +164,8 @@ func NewModel(ctx context.Context, cfg *config.Config, client *api.Client) Model
 		search:     newSearchView(),
 		histPages:  map[int64]int{},
 		histDone:   map[int64]bool{},
+		drafts:     config.LoadDrafts(),
+		unreadMark: map[int64]time.Time{},
 	}
 }
 
@@ -489,7 +494,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case messageEditedMsg:
 		m.sending = false
 		m.editing = nil
-		m.comp.reset()
+		m.restoreDraft(m.focusedID) // bring back whatever the edit interrupted
 		m.updatePlaceholder()
 		// The cable event carries the same payload; Apply dedupes by ID.
 		m.store.Apply(cable.Event{Type: cable.EventMessageUpdated, ChannelID: msg.message.ChannelID, Message: &msg.message})
@@ -713,6 +718,7 @@ func (m Model) handleThreadsLoaded(msg threadsLoadedMsg) (tea.Model, tea.Cmd) {
 func (m Model) handleSent(msg sentMsg) (Model, tea.Cmd) {
 	m.sending = false
 	m.comp.reset()
+	m.dropDraft(msg.channelID)
 	wasReply := m.replyTo != nil
 	m.replyTo = nil
 
@@ -932,6 +938,89 @@ func (m *Model) clearEditState() {
 	m.confirmDelete = nil
 }
 
+// ── Drafts ──────────────────────────────────────────────────────────────
+
+func (m *Model) draftKey(channelID int64) string {
+	c, ok := m.store.Channel(channelID)
+	if !ok {
+		return ""
+	}
+	return m.cfg.WorkspaceSlug + "/" + c.Slug
+}
+
+// stashDraft saves the composer's unsent text for the current channel and
+// persists the draft file (tiny; a channel switch is rare enough to write
+// through — drafts then survive crashes, not just clean exits).
+func (m *Model) stashDraft() {
+	if m.editing != nil || m.assist.active || m.focusedID == 0 {
+		return
+	}
+	key := m.draftKey(m.focusedID)
+	if key == "" {
+		return
+	}
+	text := m.comp.value()
+	if strings.TrimSpace(text) == "" {
+		if _, had := m.drafts[key]; !had {
+			return
+		}
+		delete(m.drafts, key)
+	} else {
+		m.drafts[key] = text
+	}
+	_ = config.SaveDrafts(m.drafts)
+}
+
+// restoreDraft fills the composer with the target channel's saved draft.
+func (m *Model) restoreDraft(channelID int64) {
+	m.comp.reset()
+	key := m.draftKey(channelID)
+	if key == "" {
+		return
+	}
+	if draft, ok := m.drafts[key]; ok {
+		m.comp.setValue(draft)
+	}
+}
+
+// dropDraft forgets a channel's draft after a successful send.
+func (m *Model) dropDraft(channelID int64) {
+	key := m.draftKey(channelID)
+	if key == "" {
+		return
+	}
+	if _, had := m.drafts[key]; !had {
+		return
+	}
+	delete(m.drafts, key)
+	_ = config.SaveDrafts(m.drafts)
+}
+
+// snapshotUnread pins the read cursor before markRead advances it, so the
+// feed can draw the NEW rule where the unreads began.
+func (m *Model) snapshotUnread(c api.Channel) {
+	if c.Member && c.LastReadAt != nil && c.Unread() > 0 {
+		m.unreadMark[c.ID] = *c.LastReadAt
+	} else {
+		delete(m.unreadMark, c.ID)
+	}
+}
+
+// firstUnreadID finds the message the NEW rule sits above: the oldest
+// message from someone else that postdates the snapshotted cursor.
+func (m *Model) firstUnreadID() int64 {
+	mark, ok := m.unreadMark[m.focusedID]
+	if !ok {
+		return 0
+	}
+	for _, msg := range m.store.Messages(m.focusedID) {
+		if msg.CreatedAt.After(mark) && !m.ownMessage(msg) && !msg.IsSystemEvent() {
+			return msg.ID
+		}
+	}
+	return 0
+}
+
 // editableSelection returns the selected message when the user may mutate
 // it (the server enforces policy regardless — this is UX, not security).
 func (m *Model) editableSelection() *api.Message {
@@ -951,6 +1040,7 @@ func (m Model) beginEdit() (tea.Model, tea.Cmd) {
 	if target == nil {
 		return m, nil
 	}
+	m.stashDraft() // the composer may hold an unsent draft — keep it
 	m.editing = target
 	m.replyTo = nil
 	m.comp.setValue(target.Body)
@@ -1175,7 +1265,7 @@ func (m Model) handleEsc() (tea.Model, tea.Cmd) {
 	}
 	if m.editing != nil {
 		m.editing = nil
-		m.comp.reset()
+		m.restoreDraft(m.focusedID)
 		m.updatePlaceholder()
 		return m, nil
 	}
@@ -1226,7 +1316,7 @@ func (m Model) openPalette() (tea.Model, tea.Cmd) {
 		switch {
 		case it.channel != nil:
 			items = append(items, paletteItem{
-				label:     kindGlyph(it.channel.Kind) + " " + it.channel.Name,
+				label:     kindGlyph(it.channel.Kind) + " " + it.channel.Title(),
 				action:    "channel",
 				channelID: it.channel.ID,
 			})
@@ -1258,9 +1348,11 @@ func (m Model) runPaletteItem(item paletteItem) (tea.Model, tea.Cmd) {
 		return m.openChannelByID(item.channelID)
 	case "agent":
 		m.view = viewChat
+		m.stashDraft()
 		m.pendingAgent = item.agent
 		m.focusedID = 0
 		m.threadReturn = 0
+		m.comp.reset()
 		m.refreshFeed(true)
 		m.updatePlaceholder()
 		m.focus = focusComposer
@@ -1451,6 +1543,7 @@ func (m Model) moveSelection(delta int) (tea.Model, tea.Cmd) {
 
 func (m Model) openSelected(focusComposerAfter bool) (tea.Model, tea.Cmd) {
 	it := m.items[m.selected]
+	m.stashDraft() // before edit state clears — an in-flight edit is not a draft
 	m.threadReturn = 0
 	m.replyTo = nil
 	m.clearEditState()
@@ -1460,10 +1553,13 @@ func (m Model) openSelected(focusComposerAfter bool) (tea.Model, tea.Cmd) {
 	if it.isAgentStub() {
 		m.pendingAgent = it.agent
 		m.focusedID = 0
+		m.comp.reset()
 		m.refreshFeed(true)
 	} else if it.channel.ID != m.focusedID {
 		m.pendingAgent = nil
+		m.snapshotUnread(*it.channel) // before markRead advances the cursor
 		m.focusedID = it.channel.ID
+		m.restoreDraft(it.channel.ID)
 		m.refreshFeed(true)
 		cmds = append(cmds, m.fetchHistory(*it.channel))
 		if it.channel.Member {
@@ -1487,13 +1583,16 @@ func (m Model) openThreadPicker() (tea.Model, tea.Cmd) {
 }
 
 func (m Model) openThread(thread api.Channel) (tea.Model, tea.Cmd) {
+	m.stashDraft()
 	if thread.Kind == "thread" && thread.ParentChannelID != nil {
 		m.threadReturn = *thread.ParentChannelID
 	} else {
 		m.threadReturn = 0
 	}
 	m.store.Upsert(thread)
+	m.snapshotUnread(thread)
 	m.focusedID = thread.ID
+	m.restoreDraft(thread.ID)
 	m.pendingAgent = nil
 	m.replyTo = nil
 	m.clearEditState()
@@ -1513,10 +1612,12 @@ func (m Model) openThread(thread api.Channel) (tea.Model, tea.Cmd) {
 
 func (m Model) returnFromThread() (tea.Model, tea.Cmd) {
 	parentID := m.threadReturn
+	m.stashDraft()
 	m.threadReturn = 0
 	m.feedSel = 0
 	if c, ok := m.store.Channel(parentID); ok {
 		m.focusedID = c.ID
+		m.restoreDraft(c.ID)
 		m.refreshFeed(true)
 		m.updatePlaceholder()
 		return m, m.fetchHistory(c)
@@ -1711,7 +1812,7 @@ func (m *Model) updatePlaceholder() {
 		m.comp.setPlaceholder("message ◇ " + m.pendingAgent.Name + " — first message opens the DM")
 	default:
 		if c, ok := m.store.Channel(m.focusedID); ok {
-			m.comp.setPlaceholder("message " + kindGlyph(c.Kind) + " " + c.Name + " — enter sends · ctrl+j newline")
+			m.comp.setPlaceholder("message " + kindGlyph(c.Kind) + " " + c.Title() + " — enter sends · ctrl+j newline")
 		}
 	}
 }
@@ -1748,7 +1849,7 @@ func (m *Model) refreshFeed(jump bool) {
 		m.vp.SetContent(styleFeedTopic.Render("no conversation yet — say hello to " + m.pendingAgent.Name))
 		return
 	}
-	content, blocks := m.renderer.Render(m.store.Messages(m.focusedID), m.feedSel)
+	content, blocks := m.renderer.Render(m.store.Messages(m.focusedID), m.feedSel, m.firstUnreadID())
 	m.feedBlocks = blocks
 	m.vp.SetContent(content)
 	if jump || wasAtBottom {
@@ -1811,10 +1912,10 @@ func (m Model) feedTitle(width int) string {
 	if !ok {
 		return ""
 	}
-	title := styleFeedTitle.Render(kindGlyph(c.Kind) + " " + c.Name)
+	title := styleFeedTitle.Render(kindGlyph(c.Kind) + " " + c.Title())
 	if m.threadReturn != 0 {
 		if parent, ok := m.store.Channel(m.threadReturn); ok {
-			title = styleFeedTopic.Render(kindGlyph(parent.Kind)+" "+parent.Name+" ▸ ") + styleFeedTitle.Render("↳ "+c.Name)
+			title = styleFeedTopic.Render(kindGlyph(parent.Kind)+" "+parent.Title()+" ▸ ") + styleFeedTitle.Render("↳ "+c.Name)
 		}
 	} else if c.Description != nil && *c.Description != "" {
 		title += "  " + styleFeedTopic.Render(truncate(*c.Description, width-lipgloss.Width(title)-2))
