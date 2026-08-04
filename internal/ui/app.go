@@ -1098,6 +1098,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.toggleAssistant()
 	case "ctrl+f":
 		return m.openSearch("", "")
+	case "ctrl+h":
+		return m.goHome()
 	case "ctrl+o":
 		return m.openDocs()
 	case "ctrl+r":
@@ -1349,7 +1351,11 @@ func (m *Model) dropDraft(channelID int64) {
 // snapshotUnread pins the read cursor before markRead advances it, so the
 // feed can draw the NEW rule where the unreads began.
 func (m *Model) snapshotUnread(c api.Channel) {
-	if c.Member && c.LastReadAt != nil && c.Unread() > 0 {
+	// c.Unread() is the boot-time serializer count; the store map also
+	// accumulates cable arrivals since (e.g. while home was up, where no
+	// markRead fires) — either source of unread arms the rule, and the
+	// stale LastReadAt is exactly the cursor those arrivals postdate.
+	if c.Member && c.LastReadAt != nil && (c.Unread() > 0 || m.store.Unread(c.ID) > 0) {
 		m.unreadMark[c.ID] = *c.LastReadAt
 	} else {
 		delete(m.unreadMark, c.ID)
@@ -1755,14 +1761,7 @@ func (m Model) runPaletteItem(item paletteItem) (tea.Model, tea.Cmd) {
 		m.tasks.fetchGen++
 		return m, m.fetchTasks()
 	case actionHome:
-		m.view = viewHome
-		m.comp.blur()
-		m.tasks.detail = nil
-		m.tasks.agenda = false
-		m.tasks.mine = true
-		m.tasks.loading = true
-		m.tasks.fetchGen++
-		return m, tea.Batch(m.fetchTasks(), m.fetchNotificationCount())
+		return m.goHome()
 	case actionAgenda:
 		m.view = viewTasks
 		m.tasks.active = true
@@ -2911,10 +2910,16 @@ func (m Model) handleCable(ev cable.Event) (tea.Model, tea.Cmd) {
 	default:
 		channelID, changed := m.store.Apply(ev)
 		if changed && channelID == m.focusedID {
-			m.store.ClearUnread(channelID)
 			m.refreshFeed(false)
-			if c, ok := m.store.Channel(channelID); ok && c.Member && ev.Type == cable.EventMessageCreated {
-				cmds = append(cmds, m.markRead(c))
+			// Only a feed the user is actually looking at consumes the
+			// message — on home (or docs/files/db/tasks) the focused channel
+			// is warm but invisible, so its unread must survive and the
+			// server-side read cursor must not advance.
+			if m.view == viewChat {
+				m.store.ClearUnread(channelID)
+				if c, ok := m.store.Channel(channelID); ok && c.Member && ev.Type == cable.EventMessageCreated {
+					cmds = append(cmds, m.markRead(c))
+				}
 			}
 		}
 	}
@@ -3115,7 +3120,7 @@ func (m Model) statusBar() string {
 	if m.softErr != "" {
 		left += styleStatusDead.Render(" ! " + truncate(m.softErr, 40))
 	}
-	keys := styleStatusKeys.Render("ctrl+k palette · ctrl+n inbox · ctrl+t threads · ctrl+c quit ")
+	keys := styleStatusKeys.Render("ctrl+k palette · ctrl+h home · ctrl+n inbox · ctrl+t threads · ctrl+c quit ")
 
 	gap := m.width - lipgloss.Width(left) - lipgloss.Width(keys)
 	if gap < 1 {

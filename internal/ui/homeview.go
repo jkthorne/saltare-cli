@@ -132,7 +132,28 @@ func (m Model) leaveHomeToChat() (tea.Model, tea.Cmd) {
 		m.snapshotUnread(c)
 		cmds = append(cmds, m.markRead(c))
 	}
+	// The viewport still holds the frame built before the snapshot (cable
+	// refreshes on home render without a mark) — rebuild so the NEW rule shows.
+	m.refreshFeed(true)
 	return m, tea.Batch(cmds...)
+}
+
+// goHome returns to the dashboard from anywhere (ctrl+h, palette),
+// closing overlays and refreshing home's data.
+func (m Model) goHome() (tea.Model, tea.Cmd) {
+	m.pal.close()
+	m.search.close()
+	m.attach.close()
+	m.notify.active = false
+	m.threadPicker.active = false
+	m.view = viewHome
+	m.comp.blur()
+	m.tasks.detail = nil
+	m.tasks.agenda = false
+	m.tasks.mine = true
+	m.tasks.loading = true
+	m.tasks.fetchGen++
+	return m, tea.Batch(m.fetchTasks(), m.fetchNotificationCount())
 }
 
 func (m Model) handleHomeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {

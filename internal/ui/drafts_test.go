@@ -101,7 +101,9 @@ func TestUnreadSeparatorPosition(t *testing.T) {
 		t.Fatalf("NEW rule (line %d) must sit above the unread message (line %d)", newIdx, freshIdx)
 	}
 
-	// A channel with no unreads never snapshots a mark.
+	// A channel with no unreads anywhere — serializer count and the store's
+	// live map both zero — never snapshots a mark.
+	m.store.ClearUnread(3)
 	m.snapshotUnread(api.Channel{ID: 3, Member: true, LastReadAt: &cursor})
 	if _, ok := m.unreadMark[3]; ok {
 		t.Fatal("no unreads → no mark")

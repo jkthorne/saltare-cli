@@ -82,8 +82,10 @@ go build -o sal ./cmd/sal
 **Home**: sal boots into a dashboard — your unread notification count,
 unread channels, and due work (overdue / today / this week). `j/k` move,
 `enter` opens the selected row (a channel, a task's detail, or the
-notifications inbox), `r` refreshes, `esc`/`q` drops into chat; the
-palette's "home" returns any time. The boot channel keeps its unread badge
+notifications inbox), `r` refreshes, `esc`/`q` drops into chat; `ctrl+h`
+(or the palette's "home") returns any time — note `ctrl+h` is claimed
+globally, so it no longer doubles as backspace in inputs (use `backspace`).
+The boot channel keeps its unread badge
 while you're on home and gains a `── NEW ──` rule when you enter it.
 
 In chat the composer has focus — just type. `enter` sends, `ctrl+j` inserts

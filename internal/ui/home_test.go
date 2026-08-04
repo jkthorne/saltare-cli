@@ -8,6 +8,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/jkthorne/saltare/cli/internal/api"
+	"github.com/jkthorne/saltare/cli/internal/cable"
 )
 
 func unreadChannel(id int64, slug string, unread int) api.Channel {
@@ -144,6 +145,82 @@ func TestPaletteHomeAction(t *testing.T) {
 	}
 	if cmd == nil {
 		t.Fatal("home entry must refresh tasks and the notification count")
+	}
+}
+
+func TestCtrlHReturnsHome(t *testing.T) {
+	m := testModel(t)
+	step, cmd := m.Update(tea.KeyMsg{Type: tea.KeyCtrlH})
+	model := step.(Model)
+	if model.view != viewHome {
+		t.Fatalf("ctrl+h must return home, got view=%d", model.view)
+	}
+	if cmd == nil {
+		t.Fatal("home entry must refresh tasks and the notification count")
+	}
+
+	// From an overlay too: ctrl+h closes it on the way home.
+	m = testModel(t)
+	step, _ = m.Update(tea.KeyMsg{Type: tea.KeyCtrlK})
+	step, _ = step.(Model).Update(tea.KeyMsg{Type: tea.KeyCtrlH})
+	model = step.(Model)
+	if model.view != viewHome || model.pal.active {
+		t.Fatalf("ctrl+h from the palette must close it and go home, got view=%d pal=%v", model.view, model.pal.active)
+	}
+}
+
+// Regression (caught live): the cable handler used to treat "focused" as
+// "on screen" — a message landing in the warm boot channel while home was
+// up cleared its unread and advanced the server read cursor.
+func TestCableEventOnHomeKeepsFocusedChannelUnread(t *testing.T) {
+	m := bootModel(t)
+	step, _ := m.Update(channelsLoadedMsg{channels: []api.Channel{unreadChannel(1, "general", 2)}})
+	model := step.(Model)
+
+	ev := cable.Event{Type: cable.EventMessageCreated, ChannelID: 1,
+		Message: &api.Message{ID: 99, ChannelID: 1, Body: "ping", CreatedAt: time.Now()}}
+	step, cmd := model.Update(cableEventMsg{ev: ev})
+	model = step.(Model)
+	if got := model.store.Unread(1); got != 3 {
+		t.Fatalf("a message arriving while on home must increment unread, got %d", got)
+	}
+	if cmd != nil {
+		t.Fatal("no markRead may fire while the feed is hidden")
+	}
+
+	// In chat the same event is consumed: unread clears, markRead fires.
+	step, _ = model.Update(tea.KeyMsg{Type: tea.KeyEsc})
+	chat := step.(Model)
+	ev.Message = &api.Message{ID: 100, ChannelID: 1, Body: "pong", CreatedAt: time.Now()}
+	step, cmd = chat.Update(cableEventMsg{ev: ev})
+	if got := step.(Model).store.Unread(1); got != 0 {
+		t.Fatalf("in chat the focused feed consumes the message, got unread=%d", got)
+	}
+	if cmd == nil {
+		t.Fatal("in chat the arrival must advance the server read cursor")
+	}
+}
+
+// Companion regression: with a clean boot (serializer count 0), a message
+// arriving during home lives only in the store's unread map — the NEW rule
+// must still arm from it when dropping into chat.
+func TestHomeArrivalWithCleanBootStillArmsNewRule(t *testing.T) {
+	m := bootModel(t)
+	ch := unreadChannel(1, "general", 0)
+	step, _ := m.Update(channelsLoadedMsg{channels: []api.Channel{ch}})
+	model := step.(Model)
+
+	ev := cable.Event{Type: cable.EventMessageCreated, ChannelID: 1,
+		Message: &api.Message{ID: 99, ChannelID: 1, Body: "ping", CreatedAt: time.Now()}}
+	step, _ = model.Update(cableEventMsg{ev: ev})
+	step, _ = step.(Model).Update(tea.KeyMsg{Type: tea.KeyEsc})
+	model = step.(Model)
+	if model.view != viewChat {
+		t.Fatalf("esc must enter chat, got view=%d", model.view)
+	}
+	mark, ok := model.unreadMark[1]
+	if !ok || !mark.Equal(*ch.LastReadAt) {
+		t.Fatalf("a cable-only unread must arm the NEW rule from the stale cursor, got %v ok=%v", mark, ok)
 	}
 }
 
