@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"strings"
 	"testing"
 
 	"github.com/jkthorne/saltare/cli/internal/api"
@@ -124,5 +125,22 @@ func TestBuildSidebarMergesAgents(t *testing.T) {
 	}
 	if len(items) != 3 {
 		t.Fatalf("want 3 rows total, got %d", len(items))
+	}
+}
+
+func TestRenderEmbedChips(t *testing.T) {
+	in := "see [[task:fix-login]] and ![[doc:api-spec]] plus [[not an embed]]"
+	got := renderEmbedChips(in)
+	if !strings.Contains(got, "⟨task:fix-login⟩") {
+		t.Fatalf("inline chip missing: %q", got)
+	}
+	if !strings.Contains(got, "⟨doc:api-spec⟩") {
+		t.Fatalf("block chip missing: %q", got)
+	}
+	if strings.Contains(got, "[[task:fix-login]]") || strings.Contains(got, "![[doc:api-spec]]") {
+		t.Fatalf("raw embed syntax survived: %q", got)
+	}
+	if !strings.Contains(got, "[[not an embed]]") {
+		t.Fatalf("non-embed brackets must stay untouched: %q", got)
 	}
 }

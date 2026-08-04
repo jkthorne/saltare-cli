@@ -27,6 +27,7 @@ const (
 	actionTasksAll      = "tasks_all"
 	actionNewTask       = "new_task"
 	actionNotifications = "notifications"
+	actionAssistant     = "assistant"
 )
 
 type palette struct {

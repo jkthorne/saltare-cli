@@ -49,6 +49,7 @@ var (
 	styleErrText   = lipgloss.NewStyle().Foreground(cPhoenix)
 
 	styleSelGutter   = lipgloss.NewStyle().Foreground(cArc)
+	styleEmbedChip   = lipgloss.NewStyle().Foreground(cArcBright).Background(cSteel)
 	styleTasksPane   = lipgloss.NewStyle().Padding(1, 2)
 	styleTaskOverdue = lipgloss.NewStyle().Foreground(cPhoenix).Bold(true)
 	styleTaskDone    = lipgloss.NewStyle().Foreground(cChrome).Strikethrough(true)

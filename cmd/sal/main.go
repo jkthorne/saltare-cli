@@ -30,7 +30,8 @@ import (
 	"github.com/jkthorne/saltare/cli/internal/ui"
 )
 
-const version = "0.1.0"
+// version is stamped by goreleaser via -ldflags "-X main.version=…".
+var version = "0.2.0-dev"
 
 func main() {
 	args := os.Args[1:]
@@ -54,6 +55,8 @@ func main() {
 		err = runSend(args)
 	case "tasks":
 		err = runTasks(args)
+	case "ask":
+		err = runAsk(args)
 	case "tail":
 		err = runTail(args)
 	case "version", "--version", "-v":
@@ -86,6 +89,8 @@ usage:
   sal tasks            list your open tasks   --all --state S --json
   sal tasks complete SLUG   mark a task completed
   sal tasks add TITLE       create a task     --project SLUG
+  sal ask QUESTION     ask Claude via the workspace inference proxy
+                            --model M (default claude-haiku-4-5)
   sal version
 `)
 }
@@ -442,6 +447,51 @@ func taskAdd(args []string) error {
 		return err
 	}
 	fmt.Printf("created %s in %s: %s\n", task.Slug, project.Name, task.Title)
+	return nil
+}
+
+func runAsk(args []string) error {
+	fs := flag.NewFlagSet("ask", flag.ExitOnError)
+	model := fs.String("model", "claude-haiku-4-5", "Claude model id")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+	question := strings.TrimSpace(strings.Join(fs.Args(), " "))
+	if question == "" {
+		raw, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			return err
+		}
+		question = strings.TrimSpace(string(raw))
+	}
+	if question == "" {
+		return fmt.Errorf("usage: sal ask QUESTION")
+	}
+
+	cfg, client, err := session()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := interruptContext()
+	defer cancel()
+
+	req := api.InferenceRequest{
+		Model:  *model,
+		System: "You are sal, answering one-shot questions in a terminal for the Saltare workspace \"" + cfg.WorkspaceName + "\". Be concise; plain text only.",
+		Messages: []api.InferenceMessage{
+			{Role: "user", Content: question},
+		},
+	}
+	_, usage, err := client.StreamInference(ctx, req, func(delta string) {
+		fmt.Print(delta)
+	})
+	fmt.Println()
+	if err != nil {
+		return err
+	}
+	if usage != nil {
+		fmt.Fprintf(os.Stderr, "· %s · %d in → %d out tokens\n", *model, usage.InputTokens, usage.OutputTokens)
+	}
 	return nil
 }
 

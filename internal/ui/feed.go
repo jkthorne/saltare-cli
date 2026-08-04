@@ -2,6 +2,7 @@ package ui
 
 import (
 	"fmt"
+	"regexp"
 	"strings"
 	"time"
 
@@ -10,6 +11,19 @@ import (
 
 	"github.com/jkthorne/saltare/cli/internal/api"
 )
+
+// embedPattern matches Saltare cross-references — [[type:slug]] inline chips
+// and ![[type:slug]] block cards — which glamour passes through verbatim.
+var embedPattern = regexp.MustCompile(`!?\[\[(\w+):([^\]\n]+)\]\]`)
+
+// renderEmbedChips swaps embed syntax for compact styled chips after markdown
+// rendering. A chip split across wrapped lines stays raw — acceptable.
+func renderEmbedChips(s string) string {
+	return embedPattern.ReplaceAllStringFunc(s, func(match string) string {
+		groups := embedPattern.FindStringSubmatch(match)
+		return styleEmbedChip.Render("⟨" + groups[1] + ":" + groups[2] + "⟩")
+	})
+}
 
 // groupWindow matches the web feed: consecutive messages from the same sender
 // within 5 minutes share one header.
@@ -153,6 +167,7 @@ func (r *feedRenderer) body(m *api.Message) string {
 	if m.EditedAt != nil {
 		out = strings.TrimRight(out, "\n") + " " + styleEditedTag.Render("(edited)") + "\n"
 	}
+	out = renderEmbedChips(out)
 	r.cache[key] = out
 	return out
 }

@@ -48,6 +48,8 @@ type mentionablesLoadedMsg struct{ mentionables []api.Mentionable }
 type historyLoadedMsg struct {
 	channelID int64
 	messages  []api.Message
+	page      int
+	older     bool // a load-older page: preserve scroll instead of jumping
 }
 type threadsLoadedMsg struct {
 	parentID int64
@@ -67,6 +69,7 @@ type projectsLoadedMsg struct{ projects []api.Project }
 type taskChangedMsg struct{ task api.Task }
 type notificationsLoadedMsg struct{ items []api.Notification }
 type notificationsClearedMsg struct{}
+type assistEventMsg struct{ ev assistEvent }
 type cableStartedMsg struct{ client *cable.Client }
 type cableEventMsg struct{ ev cable.Event }
 type markedReadMsg struct{ channelID int64 }
@@ -102,9 +105,12 @@ type Model struct {
 	pal    palette
 	tasks  tasksView
 	notify notifyView
+	assist assistant
 
 	feedSel    int64 // selected message id in the feed (0 = none)
 	feedBlocks []msgBlock
+	histPages  map[int64]int  // channel id → deepest history page loaded
+	histDone   map[int64]bool // channel id → no older pages remain
 
 	conn       connState
 	width      int
@@ -131,6 +137,8 @@ func NewModel(ctx context.Context, cfg *config.Config, client *api.Client) Model
 		comp:       newComposer(),
 		pal:        newPalette(),
 		tasks:      newTasksView(),
+		histPages:  map[int64]int{},
+		histDone:   map[int64]bool{},
 	}
 }
 
@@ -185,13 +193,17 @@ func (m Model) fetchProjects() tea.Cmd {
 }
 
 func (m Model) fetchHistory(c api.Channel) tea.Cmd {
+	return m.fetchHistoryPage(c, 1, false)
+}
+
+func (m Model) fetchHistoryPage(c api.Channel, page int, older bool) tea.Cmd {
 	client, ctx := m.client, m.ctx
 	return func() tea.Msg {
-		msgs, err := client.Messages(ctx, c.Slug, 1, 50)
+		msgs, err := client.Messages(ctx, c.Slug, page, 50)
 		if err != nil {
 			return softErrMsg{err}
 		}
-		return historyLoadedMsg{channelID: c.ID, messages: msgs}
+		return historyLoadedMsg{channelID: c.ID, messages: msgs, page: page, older: older}
 	}
 }
 
@@ -252,6 +264,47 @@ func (m Model) fetchNotifications() tea.Cmd {
 			return softErrMsg{err}
 		}
 		return notificationsLoadedMsg{items}
+	}
+}
+
+// startAssist launches one streaming completion; deltas cross into the tea
+// loop over the assistant's event channel (same pattern as cable).
+func (m *Model) startAssist(question string) tea.Cmd {
+	m.assist.pushUser(question)
+	m.assist.streaming = true
+	m.assist.current = ""
+	m.assist.events = make(chan assistEvent, 64)
+
+	client, ctx := m.client, m.ctx
+	events := m.assist.events
+	req := api.InferenceRequest{
+		Model:    assistDefaultModel,
+		System:   assistSystemPrompt(m.cfg.WorkspaceName),
+		Messages: append([]api.InferenceMessage(nil), m.assist.turns...),
+	}
+	stream := func() tea.Msg {
+		go func() {
+			full, usage, err := client.StreamInference(ctx, req, func(d string) {
+				events <- assistEvent{delta: d}
+			})
+			events <- assistEvent{done: true, full: full, usage: usage, err: err}
+		}()
+		return nil
+	}
+	return tea.Batch(stream, m.waitAssist())
+}
+
+func (m Model) waitAssist() tea.Cmd {
+	events := m.assist.events
+	if events == nil {
+		return nil
+	}
+	return func() tea.Msg {
+		ev, ok := <-events
+		if !ok {
+			return nil
+		}
+		return assistEventMsg{ev}
 	}
 }
 
@@ -357,11 +410,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case historyLoadedMsg:
-		m.store.MergeHistory(msg.channelID, msg.messages)
-		if msg.channelID == m.focusedID {
-			m.refreshFeed(true)
-		}
-		return m, nil
+		return m.handleHistoryLoaded(msg)
 
 	case threadsLoadedMsg:
 		return m.handleThreadsLoaded(msg)
@@ -402,6 +451,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.notify.items = nil
 		return m, nil
 
+	case assistEventMsg:
+		return m.handleAssistEvent(msg.ev)
+
 	case cableStartedMsg:
 		m.cable = msg.client
 		return m, m.waitEvent()
@@ -441,6 +493,38 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	return m, tea.Batch(cmds...)
 }
 
+func (m Model) handleAssistEvent(ev assistEvent) (tea.Model, tea.Cmd) {
+	if ev.done {
+		m.assist.streaming = false
+		if ev.err != nil {
+			m.softErr = "assistant: " + ev.err.Error()
+			if ev.full != "" {
+				m.assist.pushAssistant(ev.full) // keep the partial answer
+			}
+		} else {
+			m.assist.pushAssistant(ev.full)
+			if ev.usage != nil {
+				m.assist.usageLine = fmt.Sprintf("· %d in → %d out tokens", ev.usage.InputTokens, ev.usage.OutputTokens)
+			}
+		}
+		m.assist.events = nil
+		m.refreshAssist()
+		return m, nil
+	}
+	m.assist.current += ev.delta
+	m.refreshAssist()
+	return m, m.waitAssist()
+}
+
+func (m *Model) refreshAssist() {
+	if !m.assist.active {
+		return
+	}
+	feedWidth := m.width - sidebarWidth - 1
+	m.vp.SetContent(m.assist.render(m.renderer, feedWidth))
+	m.vp.GotoBottom()
+}
+
 func (m Model) handleChannelsLoaded(msg channelsLoadedMsg) (Model, tea.Cmd) {
 	m.store.SetChannels(msg.channels)
 	m.rebuildSidebar()
@@ -478,6 +562,38 @@ func (m Model) handleChannelsLoaded(msg channelsLoadedMsg) (Model, tea.Cmd) {
 	}
 	m.updatePlaceholder()
 	return m, tea.Batch(cmds...)
+}
+
+func (m Model) handleHistoryLoaded(msg historyLoadedMsg) (tea.Model, tea.Cmd) {
+	if msg.older {
+		if len(msg.messages) == 0 {
+			m.histDone[msg.channelID] = true
+			m.softErr = "beginning of history"
+			return m, nil
+		}
+		m.histPages[msg.channelID] = msg.page
+		if msg.channelID != m.focusedID {
+			m.store.MergeHistory(msg.channelID, msg.messages)
+			return m, nil
+		}
+		// Prepending grows the content above the viewport — keep what the
+		// user is looking at stationary.
+		oldTotal := m.vp.TotalLineCount()
+		oldOffset := m.vp.YOffset
+		m.store.MergeHistory(msg.channelID, msg.messages)
+		m.refreshFeed(false)
+		m.vp.SetYOffset(oldOffset + (m.vp.TotalLineCount() - oldTotal))
+		return m, nil
+	}
+
+	if m.histPages[msg.channelID] == 0 {
+		m.histPages[msg.channelID] = 1
+	}
+	m.store.MergeHistory(msg.channelID, msg.messages)
+	if msg.channelID == m.focusedID {
+		m.refreshFeed(true)
+	}
+	return m, nil
 }
 
 func (m Model) handleThreadsLoaded(msg threadsLoadedMsg) (tea.Model, tea.Cmd) {
@@ -557,6 +673,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.openPalette()
 	case "ctrl+n":
 		return m, m.fetchNotifications()
+	case "ctrl+g":
+		return m.toggleAssistant()
 	case "ctrl+r":
 		return m, tea.Batch(m.fetchChannels(), m.fetchAgents(), m.fetchProjects())
 	}
@@ -662,10 +780,24 @@ func (m Model) handleFeedKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, nil
 	case "t":
 		return m.threadForSelection()
+	case "o":
+		return m.loadOlder()
 	}
 	var cmd tea.Cmd
 	m.vp, cmd = m.vp.Update(msg)
 	return m, cmd
+}
+
+func (m Model) loadOlder() (tea.Model, tea.Cmd) {
+	c, ok := m.store.Channel(m.focusedID)
+	if !ok || m.histDone[c.ID] {
+		return m, nil
+	}
+	page := m.histPages[c.ID]
+	if page == 0 {
+		page = 1
+	}
+	return m, m.fetchHistoryPage(c, page+1, true)
 }
 
 func (m Model) handleTasksKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -827,6 +959,9 @@ func (m Model) handleEsc() (tea.Model, tea.Cmd) {
 		m.comp.closeMention()
 		return m, nil
 	}
+	if m.assist.active {
+		return m.toggleAssistant()
+	}
 	if m.replyTo != nil {
 		m.replyTo = nil
 		m.updatePlaceholder()
@@ -888,6 +1023,7 @@ func (m Model) openPalette() (tea.Model, tea.Cmd) {
 		}
 	}
 	items = append(items,
+		paletteItem{label: "◆ assistant", hint: "local claude session", action: actionAssistant},
 		paletteItem{label: "☑ tasks: mine", action: actionTasksMine},
 		paletteItem{label: "☑ tasks: all open", action: actionTasksAll},
 		paletteItem{label: "☐ new task…", action: actionNewTask},
@@ -923,6 +1059,12 @@ func (m Model) runPaletteItem(item paletteItem) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.fetchTasks(), m.tasks.openInput())
 	case actionNotifications:
 		return m, m.fetchNotifications()
+	case actionAssistant:
+		if !m.assist.active {
+			return m.toggleAssistant()
+		}
+		m.focus = focusComposer
+		return m, m.comp.focus()
 	}
 	return m, m.focusCmd()
 }
@@ -1104,10 +1246,36 @@ func (m Model) threadForSelection() (tea.Model, tea.Cmd) {
 
 // ── Sending ─────────────────────────────────────────────────────────────
 
+// toggleAssistant flips the local Claude pane; the transcript survives
+// toggling, and the feed re-renders on the way back.
+func (m Model) toggleAssistant() (tea.Model, tea.Cmd) {
+	m.assist.active = !m.assist.active
+	if m.assist.active {
+		m.view = viewChat
+		m.updatePlaceholder()
+		m.refreshAssist()
+		m.focus = focusComposer
+		return m, tea.Batch(m.comp.focus(), m.waitAssist())
+	}
+	m.updatePlaceholder()
+	m.refreshFeed(true)
+	return m, nil
+}
+
 func (m Model) send() (tea.Model, tea.Cmd) {
 	body := strings.TrimSpace(m.comp.value())
 	if body == "" || m.sending {
 		return m, nil
+	}
+
+	if m.assist.active {
+		if m.assist.streaming {
+			return m, nil
+		}
+		m.comp.reset()
+		cmd := m.startAssist(body)
+		m.refreshAssist()
+		return m, cmd
 	}
 
 	if m.pendingAgent != nil {
@@ -1166,6 +1334,8 @@ func (m *Model) rebuildSidebar() {
 
 func (m *Model) updatePlaceholder() {
 	switch {
+	case m.assist.active:
+		m.comp.setPlaceholder("ask claude — enter sends · esc back to chat · conversation is metered")
 	case m.replyTo != nil:
 		who := m.replyTo.Sender.Name
 		if who == "" {
@@ -1202,6 +1372,12 @@ func (m *Model) layout() {
 
 func (m *Model) refreshFeed(jump bool) {
 	m.layout()
+	if m.assist.active {
+		// The viewport belongs to the assistant right now; chat re-renders
+		// when the pane toggles back.
+		m.refreshAssist()
+		return
+	}
 	wasAtBottom := m.vp.AtBottom()
 	if m.pendingAgent != nil {
 		m.vp.SetContent(styleFeedTopic.Render("no conversation yet — say hello to " + m.pendingAgent.Name))
@@ -1258,6 +1434,9 @@ func (m Model) renderFeedPane(width int) string {
 }
 
 func (m Model) feedTitle(width int) string {
+	if m.assist.active {
+		return styleFeedTitle.Render("◆ assistant") + "  " + styleFeedTopic.Render(assistDefaultModel)
+	}
 	if m.pendingAgent != nil {
 		return styleFeedTitle.Render("◇ " + m.pendingAgent.Name)
 	}

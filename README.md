@@ -1,9 +1,9 @@
 # sal — Saltare in your terminal
 
-A Go TUI + CLI client for Saltare. Phase 3 covers **chat + work**: live feed
-with markdown, composer with @-mention autocomplete, threads (browse, reply,
-or start one from any message), agent DMs, a tasks pane, a command palette,
-and a notifications inbox.
+A Go TUI + CLI client for Saltare: live chat with markdown and @-mentions,
+threads (browse, reply, or start one from any message), agent DMs, a tasks
+pane, a command palette, a notifications inbox — and a built-in **Claude
+assistant** riding the workspace's metered inference proxy.
 
 ```
 ┌ sidebar ──┬ feed ────────────────────────────────┐
@@ -18,7 +18,15 @@ and a notifications inbox.
 └──────────────────────────────────────────────────┘
 ```
 
-## Quickstart
+## Install
+
+From a GitHub release: grab the `sal_*_<os>_<arch>.tar.gz` for your platform.
+Releases are cut by pushing a `v*` tag (`.github/workflows/release.yml` runs
+goreleaser; config in `cli/.goreleaser.yaml`). Homebrew tap publishing is
+pre-wired but commented out in `.goreleaser.yaml` until the
+`jkthorne/homebrew-tap` repo and `HOMEBREW_TAP_TOKEN` secret exist.
+
+From source:
 
 ```sh
 cd cli
@@ -40,6 +48,7 @@ go build -o sal ./cmd/sal
 | `sal tasks` | List your open tasks (`--all`, `--state S`, `--json`) |
 | `sal tasks complete SLUG` | Mark a task completed |
 | `sal tasks add TITLE` | Create a self-assigned task (`--project SLUG`) |
+| `sal ask QUESTION` | One-shot Claude answer streamed to stdout (`--model`; reads stdin when QUESTION omitted) |
 | `sal version` | Print the version |
 
 ## TUI keys
@@ -56,8 +65,15 @@ if it has none — your reply creates the thread and the view follows it.
 `pgup/pgdn` scroll from any focus. `ctrl+r` refresh · `ctrl+c` quit.
 
 `ctrl+k` opens the **command palette**: fuzzy-jump to any channel or agent, or
-run actions (tasks views, new task, notifications). `ctrl+n` opens the
-**notifications inbox** — `enter` jumps to the channel, `R` marks all read.
+run actions (assistant, tasks views, new task, notifications). `ctrl+n` opens
+the **notifications inbox** — `enter` jumps to the channel, `R` marks all read.
+
+`ctrl+g` toggles the **assistant** — a local Claude session over the
+workspace's inference proxy (the server holds the provider key and meters
+credits; the conversation itself never leaves your terminal). Streaming, with
+markdown rendering and token usage per answer. No tool access yet. In the
+feed, `o` loads older history without losing your scroll position, and
+`[[type:slug]]` embeds render as `⟨type:slug⟩` chips.
 
 The **tasks pane** (via palette): `j/k` move, `x`/`enter` complete or reopen,
 `n` new task (title, then a project pick when several exist — tasks created

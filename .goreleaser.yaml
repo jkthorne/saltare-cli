@@ -1,0 +1,56 @@
+# goreleaser config for sal. Run from cli/ (the release workflow sets
+# working-directory). Local dry run:
+#   cd cli && goreleaser release --snapshot --clean
+version: 2
+
+project_name: sal
+
+builds:
+  - id: sal
+    main: ./cmd/sal
+    binary: sal
+    env:
+      - CGO_ENABLED=0
+    goos:
+      - darwin
+      - linux
+    goarch:
+      - amd64
+      - arm64
+    ldflags:
+      - -s -w -X main.version={{.Version}}
+
+archives:
+  - id: sal
+    formats: [tar.gz]
+    name_template: "sal_{{ .Version }}_{{ .Os }}_{{ .Arch }}"
+    files:
+      - README.md
+
+checksum:
+  name_template: checksums.txt
+
+changelog:
+  use: github
+  filters:
+    include:
+      - "^feat\\(cli\\)"
+      - "^fix\\(cli\\)"
+
+# Homebrew tap publishing — uncomment once (1) the jkthorne/homebrew-tap repo
+# exists and (2) the HOMEBREW_TAP_TOKEN secret (PAT with repo scope) is set on
+# this repo. Left disabled so releases work before the tap does: an empty
+# token would fail the whole release, not skip the step.
+#
+# brews:
+#   - name: sal
+#     repository:
+#       owner: jkthorne
+#       name: homebrew-tap
+#       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
+#     directory: Formula
+#     homepage: https://github.com/jkthorne/saltare
+#     description: "Saltare in your terminal — chat, tasks, agents, and Claude"
+#     license: MIT
+#     test: |
+#       system "#{bin}/sal", "version"

@@ -1,0 +1,109 @@
+package ui
+
+import (
+	"strings"
+
+	"github.com/jkthorne/saltare/cli/internal/api"
+)
+
+// assistDefaultModel is served by the inference proxy on every plan tier and
+// aliased in the server's cost calculator.
+const assistDefaultModel = "claude-haiku-4-5"
+const assistMaxTurns = 20
+
+// assistEvent crosses from the streaming goroutine into the tea loop.
+type assistEvent struct {
+	delta string
+	done  bool
+	full  string
+	usage *api.InferenceUsage
+	err   error
+}
+
+// assistant is the local Claude session: the conversation lives client-side,
+// only inference rides through the server (which meters credits).
+type assistant struct {
+	active    bool
+	turns     []api.InferenceMessage
+	current   string // partial text while streaming
+	streaming bool
+	events    chan assistEvent
+	usageLine string
+}
+
+func (a *assistant) pushUser(q string) {
+	a.turns = append(a.turns, api.InferenceMessage{Role: "user", Content: q})
+	if len(a.turns) > assistMaxTurns {
+		a.turns = a.turns[len(a.turns)-assistMaxTurns:]
+	}
+}
+
+func (a *assistant) pushAssistant(text string) {
+	a.turns = append(a.turns, api.InferenceMessage{Role: "assistant", Content: text})
+	if len(a.turns) > assistMaxTurns {
+		a.turns = a.turns[len(a.turns)-assistMaxTurns:]
+	}
+}
+
+func assistSystemPrompt(workspaceName string) string {
+	return "You are the built-in assistant of sal, the terminal client for the Saltare workspace \"" +
+		workspaceName + "\". Be concise. Plain text or simple markdown only — it renders in a terminal. " +
+		"You cannot run tools or read workspace data yet; say so if asked."
+}
+
+// render builds the transcript pane content. markdown renders completed
+// assistant turns; the in-flight turn stays raw with a cursor block.
+func (a *assistant) render(r *feedRenderer, width int) string {
+	var b strings.Builder
+	if len(a.turns) == 0 && !a.streaming {
+		b.WriteString(styleFeedTopic.Render("ask anything — the conversation stays on this device; inference is metered by the workspace"))
+		b.WriteString("\n")
+	}
+	for _, turn := range a.turns {
+		if turn.Role == "user" {
+			b.WriteString("\n" + styleSenderUser.Render("you") + "\n")
+			b.WriteString(indentPlain(turn.Content, width-4) + "\n")
+			continue
+		}
+		b.WriteString("\n" + styleSenderAgent.Render("◆ claude") + "\n")
+		if r.markdown != nil {
+			if out, err := r.markdown.Render(turn.Content); err == nil {
+				b.WriteString(strings.Trim(out, "\n") + "\n")
+				continue
+			}
+		}
+		b.WriteString(indentPlain(turn.Content, width-4) + "\n")
+	}
+	if a.streaming {
+		b.WriteString("\n" + styleSenderAgent.Render("◆ claude") + "\n")
+		b.WriteString(indentPlain(a.current, width-4) + styleSelGutter.Render("▊") + "\n")
+	}
+	if a.usageLine != "" && !a.streaming {
+		b.WriteString("\n" + styleFeedTopic.Render(a.usageLine) + "\n")
+	}
+	return b.String()
+}
+
+func indentPlain(s string, width int) string {
+	if width < 10 {
+		width = 10
+	}
+	return wrapPlain(s, width)
+}
+
+// wrapPlain is a dumb word wrapper for raw (non-markdown) turns.
+func wrapPlain(s string, width int) string {
+	var out []string
+	for _, line := range strings.Split(s, "\n") {
+		for len(line) > width {
+			cut := strings.LastIndex(line[:width], " ")
+			if cut <= 0 {
+				cut = width
+			}
+			out = append(out, line[:cut])
+			line = strings.TrimLeft(line[cut:], " ")
+		}
+		out = append(out, line)
+	}
+	return strings.Join(out, "\n")
+}
