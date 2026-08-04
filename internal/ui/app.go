@@ -72,6 +72,11 @@ type projectsLoadedMsg struct{ projects []api.Project }
 type taskChangedMsg struct{ task api.Task }
 type notificationsLoadedMsg struct{ items []api.Notification }
 type notificationsClearedMsg struct{}
+type messageEditedMsg struct{ message api.Message }
+type messageDeletedMsg struct {
+	channelID int64
+	id        int64
+}
 type searchDebounceMsg struct{ gen int }
 type searchResultsMsg struct {
 	gen     int
@@ -102,10 +107,12 @@ type Model struct {
 	focus    focusZone
 	view     viewMode
 
-	focusedID    int64
-	pendingAgent *api.Agent
-	threadReturn int64
-	replyTo      *api.Message // composing a reply-in-thread to this message
+	focusedID     int64
+	pendingAgent  *api.Agent
+	threadReturn  int64
+	replyTo       *api.Message // composing a reply-in-thread to this message
+	editing       *api.Message // composer holds an edit of this message
+	confirmDelete *api.Message // armed y/n delete confirmation
 
 	threadPicker struct {
 		active  bool
@@ -479,6 +486,24 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.notify.items = nil
 		return m, nil
 
+	case messageEditedMsg:
+		m.sending = false
+		m.editing = nil
+		m.comp.reset()
+		m.updatePlaceholder()
+		// The cable event carries the same payload; Apply dedupes by ID.
+		m.store.Apply(cable.Event{Type: cable.EventMessageUpdated, ChannelID: msg.message.ChannelID, Message: &msg.message})
+		m.refreshFeed(false)
+		return m, nil
+
+	case messageDeletedMsg:
+		m.store.Apply(cable.Event{Type: cable.EventMessageDeleted, ChannelID: msg.channelID, MessageID: msg.id})
+		if m.feedSel == msg.id {
+			m.feedSel = 0
+		}
+		m.refreshFeed(false)
+		return m, nil
+
 	case searchDebounceMsg:
 		if m.search.active && msg.gen == m.search.gen {
 			return m, m.runSearch()
@@ -830,8 +855,19 @@ func (m Model) handleSidebarKey(key string) (tea.Model, tea.Cmd) {
 }
 
 // handleFeedKey is selection mode: j/k moves a message cursor, t opens or
-// starts the selected message's thread.
+// starts the selected message's thread, e/d edit or delete an own message,
+// y copies a permalink.
 func (m Model) handleFeedKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	// An armed delete confirmation eats the next key — before "q" quits.
+	if m.confirmDelete != nil {
+		target := *m.confirmDelete
+		m.confirmDelete = nil
+		if msg.String() == "y" {
+			return m, m.deleteMessage(target)
+		}
+		return m, nil
+	}
+
 	switch msg.String() {
 	case "q":
 		return m, tea.Quit
@@ -851,6 +887,12 @@ func (m Model) handleFeedKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.threadForSelection()
 	case "o":
 		return m.loadOlder()
+	case "e":
+		return m.beginEdit()
+	case "d":
+		return m.armDelete()
+	case "y":
+		return m.copySelectionPermalink()
 	case "/":
 		if c, ok := m.store.Channel(m.focusedID); ok {
 			return m.openSearch(c.Slug, c.Title())
@@ -872,6 +914,97 @@ func (m Model) loadOlder() (tea.Model, tea.Cmd) {
 		page = 1
 	}
 	return m, m.fetchHistoryPage(c, page+1, true)
+}
+
+// ── Message edit/delete ─────────────────────────────────────────────────
+
+func (m Model) ownMessage(msg api.Message) bool {
+	return msg.Sender.Type == "User" && msg.Sender.ID == m.cfg.UserID
+}
+
+// clearEditState abandons any in-flight edit/delete when the composer's
+// target changes (channel switch, assistant toggle).
+func (m *Model) clearEditState() {
+	if m.editing != nil {
+		m.comp.reset()
+	}
+	m.editing = nil
+	m.confirmDelete = nil
+}
+
+// editableSelection returns the selected message when the user may mutate
+// it (the server enforces policy regardless — this is UX, not security).
+func (m *Model) editableSelection() *api.Message {
+	target := m.findMessage(m.feedSel)
+	if target == nil || target.IsSystemEvent() {
+		return nil
+	}
+	if !m.ownMessage(*target) {
+		m.softErr = "not your message"
+		return nil
+	}
+	return target
+}
+
+func (m Model) beginEdit() (tea.Model, tea.Cmd) {
+	target := m.editableSelection()
+	if target == nil {
+		return m, nil
+	}
+	m.editing = target
+	m.replyTo = nil
+	m.comp.setValue(target.Body)
+	m.focus = focusComposer
+	m.feedSel = 0
+	m.refreshFeed(false)
+	m.updatePlaceholder()
+	return m, m.comp.focus()
+}
+
+func (m Model) armDelete() (tea.Model, tea.Cmd) {
+	target := m.editableSelection()
+	if target == nil {
+		return m, nil
+	}
+	m.confirmDelete = target
+	return m, nil
+}
+
+func (m Model) copySelectionPermalink() (tea.Model, tea.Cmd) {
+	target := m.findMessage(m.feedSel)
+	if target == nil {
+		return m, nil
+	}
+	c, ok := m.store.Channel(target.ChannelID)
+	if !ok {
+		return m, nil
+	}
+	if err := copyToClipboard(m.messagePermalink(c.Kind, c.Slug, target.ID)); err != nil {
+		m.softErr = "copy failed: " + err.Error()
+		return m, nil
+	}
+	return m, m.showToast("permalink copied")
+}
+
+func (m Model) editMessage(target api.Message, body string) tea.Cmd {
+	client, ctx := m.client, m.ctx
+	return func() tea.Msg {
+		updated, err := client.EditMessage(ctx, target.ID, body)
+		if err != nil {
+			return sendFailedMsg{err}
+		}
+		return messageEditedMsg{*updated}
+	}
+}
+
+func (m Model) deleteMessage(target api.Message) tea.Cmd {
+	client, ctx := m.client, m.ctx
+	return func() tea.Msg {
+		if err := client.DeleteMessage(ctx, target.ID); err != nil {
+			return softErrMsg{err}
+		}
+		return messageDeletedMsg{channelID: target.ChannelID, id: target.ID}
+	}
 }
 
 func (m Model) handleTasksKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
@@ -1033,8 +1166,18 @@ func (m Model) handleEsc() (tea.Model, tea.Cmd) {
 		m.comp.closeMention()
 		return m, nil
 	}
+	if m.confirmDelete != nil {
+		m.confirmDelete = nil
+		return m, nil
+	}
 	if m.assist.active {
 		return m.toggleAssistant()
+	}
+	if m.editing != nil {
+		m.editing = nil
+		m.comp.reset()
+		m.updatePlaceholder()
+		return m, nil
 	}
 	if m.replyTo != nil {
 		m.replyTo = nil
@@ -1310,6 +1453,7 @@ func (m Model) openSelected(focusComposerAfter bool) (tea.Model, tea.Cmd) {
 	it := m.items[m.selected]
 	m.threadReturn = 0
 	m.replyTo = nil
+	m.clearEditState()
 	m.feedSel = 0
 
 	var cmds []tea.Cmd
@@ -1352,6 +1496,7 @@ func (m Model) openThread(thread api.Channel) (tea.Model, tea.Cmd) {
 	m.focusedID = thread.ID
 	m.pendingAgent = nil
 	m.replyTo = nil
+	m.clearEditState()
 	m.feedSel = 0
 	m.refreshFeed(true)
 	if m.cable != nil {
@@ -1464,6 +1609,7 @@ func (m Model) threadForSelection() (tea.Model, tea.Cmd) {
 func (m Model) toggleAssistant() (tea.Model, tea.Cmd) {
 	m.assist.active = !m.assist.active
 	if m.assist.active {
+		m.clearEditState()
 		m.view = viewChat
 		m.updatePlaceholder()
 		m.refreshAssist()
@@ -1491,6 +1637,10 @@ func (m Model) send() (tea.Model, tea.Cmd) {
 		return m, cmd
 	}
 
+	if m.editing != nil {
+		m.sending = true
+		return m, m.editMessage(*m.editing, body)
+	}
 	if m.pendingAgent != nil {
 		m.sending = true
 		return m, m.sendToAgent(*m.pendingAgent, body)
@@ -1549,6 +1699,8 @@ func (m *Model) updatePlaceholder() {
 	switch {
 	case m.assist.active:
 		m.comp.setPlaceholder("ask claude — enter sends · esc back to chat · conversation is metered")
+	case m.editing != nil:
+		m.comp.setPlaceholder("editing message — enter saves · esc cancels")
 	case m.replyTo != nil:
 		who := m.replyTo.Sender.Name
 		if who == "" {
@@ -1703,6 +1855,9 @@ func (m Model) statusBar() string {
 	left := conn + styleStatusBar.Render(" "+m.cfg.WorkspaceName+" · saltare cum machina")
 	if m.sending {
 		left += styleStatusBar.Render(" · sending…")
+	}
+	if m.confirmDelete != nil {
+		left += styleStatusRetry.Render(" delete message? y/n ")
 	}
 	if m.toast != "" {
 		left += styleStatusOK.Render(" · " + truncate(m.toast, 40))

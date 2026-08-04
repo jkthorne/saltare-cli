@@ -55,6 +55,22 @@ func (c *composer) view() string            { return c.ta.View() }
 func (c *composer) height() int             { return c.ta.Height() }
 func (c *composer) setPlaceholder(s string) { c.ta.Placeholder = s }
 
+// setValue prefills the composer (message editing) with the height recalc
+// update() normally handles; the cursor lands at the end of the text.
+func (c *composer) setValue(s string) {
+	c.ta.SetValue(s)
+	lines := c.ta.LineCount()
+	if lines < 1 {
+		lines = 1
+	}
+	if lines > composerMaxHeight {
+		lines = composerMaxHeight
+	}
+	c.ta.SetHeight(lines)
+	c.ta.CursorEnd()
+	c.closeMention()
+}
+
 func (c *composer) update(msg tea.Msg) tea.Cmd {
 	var cmd tea.Cmd
 	c.ta, cmd = c.ta.Update(msg)
