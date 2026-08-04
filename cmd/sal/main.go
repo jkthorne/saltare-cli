@@ -61,6 +61,10 @@ func main() {
 		err = runSearch(args)
 	case "docs":
 		err = runDocs(args)
+	case "files":
+		err = runFiles(args)
+	case "db":
+		err = runDB(args)
 	case "tasks":
 		err = runTasks(args)
 	case "ask":
@@ -100,6 +104,12 @@ usage:
   sal docs cat SLUG    print a document        --raw (default when piped)
   sal docs edit SLUG   edit a document in $EDITOR   --force on conflicts
   sal docs new TITLE   create a document       --body-file PATH (- = stdin)
+  sal files            list uploads            --json --category C -q QUERY
+  sal files put PATH   upload a file           --title T
+  sal files get SLUG   download a file         -o PATH --force
+  sal files rm SLUG    delete an upload
+  sal db               list databases          --json
+  sal db rows SLUG     dump a table (TSV)      --csv --json --limit N
   sal tasks            list your open tasks   --all --state S --json
   sal tasks show SLUG       print a task's detail
   sal tasks complete SLUG   mark a task completed

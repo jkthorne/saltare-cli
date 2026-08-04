@@ -1655,6 +1655,10 @@ func (m Model) followEmbed(ref embedRef) (tea.Model, tea.Cmd) {
 		}
 	case "agent":
 		return m.followAgentEmbed(ref.ref)
+	case "upload":
+		return m, m.showToast("fetch it: sal files get " + ref.ref)
+	case "db":
+		return m, m.showToast("dump it: sal db rows " + ref.ref)
 	default:
 		return m, m.showToast("⟨" + ref.kind + ":…⟩ opens on the web — sal follows doc/task/channel/msg/agent")
 	}
