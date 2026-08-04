@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"strings"
 	"testing"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -165,6 +166,38 @@ func TestDBColumnPanningClamps(t *testing.T) {
 	step, _ = model.Update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("l")})
 	if step.(Model).db.colOff != 1 {
 		t.Fatalf("l must advance the window, got %d", step.(Model).db.colOff)
+	}
+}
+
+// Regression: the grid renders at least one frame before the schema fetch
+// resolves — View() must not dereference a nil database (crashed in the
+// field opening a spreadsheet from the palette).
+func TestGridRendersWhileSchemaStillLoading(t *testing.T) {
+	m := testModel(t)
+	m.width, m.height = 100, 30
+	m.ready = true
+	m.loadingMsg = ""
+
+	step, cmd := m.openDBGrid("crm")
+	model := step.(Model)
+	if cmd == nil {
+		t.Fatal("opening the grid must dispatch fetches")
+	}
+
+	out := model.View() // panicked before the nil guard
+	if !strings.Contains(out, "crm") || !strings.Contains(out, "loading") {
+		t.Fatalf("the loading frame should name the table, got %q", out[:min(len(out), 120)])
+	}
+
+	// Stale fetches from a previously opened table must be dropped.
+	step, _ = model.Update(dbRowsLoadedMsg{slug: "old-table", page: 1, rows: []api.DBRow{{ID: 1}}})
+	model = step.(Model)
+	if len(model.db.rows) != 0 {
+		t.Fatal("rows from another table must be ignored")
+	}
+	step, _ = model.Update(dbOpenedMsg{database: api.Database{Slug: "old-table", Name: "Old"}})
+	if step.(Model).db.database != nil {
+		t.Fatal("a schema from another table must be ignored")
 	}
 }
 

@@ -22,13 +22,14 @@ type dbView struct {
 	sel     int
 	loading bool
 
-	database *api.Database // schema-bearing, grid open
-	rows     []api.DBRow
-	pages    int  // pages fetched so far
-	more     bool // a full last page suggests more rows remain
-	grid     table.Model
-	built    bool // grid constructed at least once (styles applied)
-	colOff   int  // first visible data column (id is always shown)
+	database    *api.Database // schema-bearing, grid open
+	pendingSlug string        // the table the grid is opening/showing — stale fetches are dropped
+	rows        []api.DBRow
+	pages       int  // pages fetched so far
+	more        bool // a full last page suggests more rows remain
+	grid        table.Model
+	built       bool // grid constructed at least once (styles applied)
+	colOff      int  // first visible data column (id is always shown)
 
 	detailIdx int // index into rows
 	fieldSel  int
@@ -193,6 +194,14 @@ func (d *dbView) renderList(width, height int) string {
 }
 
 func (d *dbView) renderGrid(width, height int) string {
+	// The schema fetch resolves after the first frame — render the loading
+	// state until it lands (d.database nil until dbOpenedMsg).
+	if d.database == nil {
+		return styleFeedTitle.Render("▦ "+d.pendingSlug) + "\n\n" +
+			styleFeedTopic.Render("loading…") + "\n" +
+			styleFeedTopic.Render("esc back")
+	}
+
 	title := styleFeedTitle.Render("▦ " + d.database.Name)
 	count := fmt.Sprintf("showing %d of %d", len(d.rows), d.database.RowsCount)
 	if d.more {
@@ -212,7 +221,7 @@ func (d *dbView) renderGrid(width, height int) string {
 
 func (d *dbView) renderDetail(width, height int) string {
 	row := d.currentRow()
-	if row == nil {
+	if row == nil || d.database == nil {
 		return styleFeedTopic.Render("row gone — esc")
 	}
 	var rows []string

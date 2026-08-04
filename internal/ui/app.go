@@ -680,6 +680,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case dbOpenedMsg:
+		if msg.database.Slug != m.db.pendingSlug {
+			return m, nil // stale fetch from a previous table
+		}
 		database := msg.database
 		m.db.database = &database
 		if m.db.rows != nil || database.RowsCount == 0 {
@@ -689,7 +692,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case dbRowsLoadedMsg:
-		if m.db.database != nil && m.db.database.Slug != msg.slug {
+		if msg.slug != m.db.pendingSlug {
 			return m, nil // stale fetch from a previous table
 		}
 		if msg.page == 1 {
@@ -2177,9 +2180,11 @@ func (m Model) openDBGrid(slug string) (tea.Model, tea.Cmd) {
 	model.db.level = dbLevelGrid
 	model.db.loading = true
 	model.db.database = nil
+	model.db.pendingSlug = slug
 	model.db.rows = nil
 	model.db.pages = 0
 	model.db.colOff = 0
+	model.db.built = false // a previous table's grid must not render or take keys
 	return model, tea.Batch(cmd, model.fetchDatabase(slug), model.fetchDBRows(slug, 1))
 }
 
