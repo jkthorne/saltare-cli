@@ -39,6 +39,10 @@ func newComposer() composer {
 	ta.SetHeight(1)
 	// Enter sends (handled by the app); newline moves to ctrl+j.
 	ta.KeyMap.InsertNewline = key.NewBinding(key.WithKeys("ctrl+j"))
+	// Focus at construction: Init() runs on a value-receiver copy, so a
+	// Focus() there mutates a discarded model and the composer boots blurred
+	// — silently swallowing all typing (a blurred textarea ignores keys).
+	ta.Focus()
 	return composer{ta: ta}
 }
 

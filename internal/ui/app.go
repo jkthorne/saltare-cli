@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"strings"
 
+	"github.com/charmbracelet/bubbles/textarea"
 	"github.com/charmbracelet/bubbles/viewport"
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
@@ -143,7 +144,9 @@ func NewModel(ctx context.Context, cfg *config.Config, client *api.Client) Model
 }
 
 func (m Model) Init() tea.Cmd {
-	return tea.Batch(m.fetchChannels(), m.fetchAgents(), m.fetchMentionables(), m.fetchProjects(), m.comp.focus())
+	// The composer is already focused (set in newComposer — mutations here on
+	// the value receiver would be discarded); textarea.Blink starts the cursor.
+	return tea.Batch(m.fetchChannels(), m.fetchAgents(), m.fetchMentionables(), m.fetchProjects(), textarea.Blink)
 }
 
 // ── Commands ────────────────────────────────────────────────────────────

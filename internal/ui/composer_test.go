@@ -4,6 +4,8 @@ import (
 	"strings"
 	"testing"
 
+	tea "github.com/charmbracelet/bubbletea"
+
 	"github.com/jkthorne/saltare/cli/internal/api"
 )
 
@@ -142,5 +144,17 @@ func TestRenderEmbedChips(t *testing.T) {
 	}
 	if !strings.Contains(got, "[[not an embed]]") {
 		t.Fatalf("non-embed brackets must stay untouched: %q", got)
+	}
+}
+
+// TestComposerAcceptsTypingAtBoot drives a real key event through a freshly
+// constructed composer. A blurred textarea silently ignores keys, and Init()
+// can't focus it (value receiver — the mutation is discarded), so focus must
+// be set at construction.
+func TestComposerAcceptsTypingAtBoot(t *testing.T) {
+	c := newComposer()
+	c.update(tea.KeyMsg{Type: tea.KeyRunes, Runes: []rune("hi")})
+	if c.value() != "hi" {
+		t.Fatalf("fresh composer swallowed typing; got %q", c.value())
 	}
 }
