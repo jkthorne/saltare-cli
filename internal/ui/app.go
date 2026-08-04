@@ -5,7 +5,9 @@ package ui
 
 import (
 	"context"
+	"errors"
 	"fmt"
+	"os"
 	"strings"
 	"time"
 
@@ -42,6 +44,7 @@ type viewMode int
 const (
 	viewChat viewMode = iota
 	viewTasks
+	viewDocs
 )
 
 // Bubble Tea messages.
@@ -72,6 +75,14 @@ type projectsLoadedMsg struct{ projects []api.Project }
 type taskChangedMsg struct{ task api.Task }
 type notificationsLoadedMsg struct{ items []api.Notification }
 type notificationsClearedMsg struct{}
+type docsLoadedMsg struct{ docs []api.Document }
+type docLoadedMsg struct {
+	doc  api.Document
+	edit bool // open the editor straight after (new-document flow)
+}
+type docSavedMsg struct{ doc api.Document }
+type docConflictMsg struct{ conflict docConflict }
+type editorFinishedMsg struct{ err error }
 type messageEditedMsg struct{ message api.Message }
 type messageDeletedMsg struct {
 	channelID int64
@@ -124,6 +135,7 @@ type Model struct {
 	notify notifyView
 	assist assistant
 	search searchView
+	docs   docsView
 
 	toast    string
 	toastGen int
@@ -162,6 +174,7 @@ func NewModel(ctx context.Context, cfg *config.Config, client *api.Client) Model
 		pal:        newPalette(),
 		tasks:      newTasksView(),
 		search:     newSearchView(),
+		docs:       newDocsView(),
 		histPages:  map[int64]int{},
 		histDone:   map[int64]bool{},
 		drafts:     config.LoadDrafts(),
@@ -426,6 +439,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case tea.WindowSizeMsg:
 		m.width, m.height = msg.Width, msg.Height
 		m.layout()
+		m.docs.resize(m.width-sidebarWidth-1, m.height-1)
+		if m.docs.viewing != nil {
+			m.docs.showDocument(m.docs.viewing)
+		}
 		m.ready = true
 		m.refreshFeed(false)
 		return m, nil
@@ -490,6 +507,43 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case notificationsClearedMsg:
 		m.notify.items = nil
 		return m, nil
+
+	case docsLoadedMsg:
+		m.docs.loading = false
+		m.docs.list = msg.docs
+		if m.docs.sel >= len(msg.docs) {
+			m.docs.sel = 0
+		}
+		return m, nil
+
+	case docLoadedMsg:
+		m.docs.loading = false
+		doc := msg.doc
+		m.docs.upsert(doc)
+		m.docs.showDocument(&doc)
+		if msg.edit {
+			return m.startDocEdit(doc)
+		}
+		return m, nil
+
+	case docSavedMsg:
+		m.docs.upsert(msg.doc)
+		if m.docs.editPath != "" {
+			_ = os.Remove(m.docs.editPath)
+		}
+		m.docs.editSlug, m.docs.editPath, m.docs.editBody = "", "", ""
+		m.docs.conflict = nil
+		doc := msg.doc
+		m.docs.showDocument(&doc)
+		return m, m.showToast("document saved")
+
+	case docConflictMsg:
+		conflict := msg.conflict
+		m.docs.conflict = &conflict
+		return m, nil
+
+	case editorFinishedMsg:
+		return m.handleEditorFinished(msg)
 
 	case messageEditedMsg:
 		m.sending = false
@@ -567,6 +621,10 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, m.pal.update(msg))
 	} else if m.search.active {
 		cmds = append(cmds, m.updateSearchInput(msg))
+	} else if m.docs.inputOpen {
+		var cmd tea.Cmd
+		m.docs.input, cmd = m.docs.input.Update(msg)
+		cmds = append(cmds, cmd)
 	} else if m.tasks.inputOpen {
 		var cmd tea.Cmd
 		m.tasks.input, cmd = m.tasks.input.Update(msg)
@@ -772,6 +830,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.toggleAssistant()
 	case "ctrl+f":
 		return m.openSearch("", "")
+	case "ctrl+o":
+		return m.openDocs()
 	case "ctrl+r":
 		return m, tea.Batch(m.fetchChannels(), m.fetchAgents(), m.fetchProjects())
 	}
@@ -787,6 +847,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.view == viewTasks {
 		return m.handleTasksKey(msg)
+	}
+	if m.view == viewDocs {
+		return m.handleDocsKey(msg)
 	}
 
 	switch key {
@@ -1331,6 +1394,7 @@ func (m Model) openPalette() (tea.Model, tea.Cmd) {
 	}
 	items = append(items,
 		paletteItem{label: "⌕ search workspace", action: actionSearch},
+		paletteItem{label: "▤ documents", action: actionDocs},
 		paletteItem{label: "◆ assistant", hint: "local claude session", action: actionAssistant},
 		paletteItem{label: "☑ tasks: mine", action: actionTasksMine},
 		paletteItem{label: "☑ tasks: all open", action: actionTasksAll},
@@ -1371,6 +1435,8 @@ func (m Model) runPaletteItem(item paletteItem) (tea.Model, tea.Cmd) {
 		return m, m.fetchNotifications()
 	case actionSearch:
 		return m.openSearch("", "")
+	case actionDocs:
+		return m.openDocs()
 	case actionAssistant:
 		if !m.assist.active {
 			return m.toggleAssistant()
@@ -1379,6 +1445,221 @@ func (m Model) runPaletteItem(item paletteItem) (tea.Model, tea.Cmd) {
 		return m, m.comp.focus()
 	}
 	return m, m.focusCmd()
+}
+
+// ── Documents ───────────────────────────────────────────────────────────
+
+func (m Model) openDocs() (tea.Model, tea.Cmd) {
+	m.pal.close()
+	m.search.close()
+	m.notify.active = false
+	m.threadPicker.active = false
+	m.view = viewDocs
+	m.comp.blur()
+	m.docs.resize(m.width-sidebarWidth-1, m.height-1)
+	if len(m.docs.list) == 0 {
+		m.docs.loading = true
+		return m, m.fetchDocuments()
+	}
+	return m, nil
+}
+
+// openDocBySlug jumps straight into the reader (follow-embed, search).
+func (m Model) openDocBySlug(slug string) (tea.Model, tea.Cmd) {
+	next, cmd := m.openDocs()
+	model := next.(Model)
+	model.docs.loading = true
+	return model, tea.Batch(cmd, model.fetchDocument(slug, false))
+}
+
+func (m Model) fetchDocuments() tea.Cmd {
+	client, ctx := m.client, m.ctx
+	return func() tea.Msg {
+		docs, err := client.Documents(ctx)
+		if err != nil {
+			return softErrMsg{err}
+		}
+		return docsLoadedMsg{docs}
+	}
+}
+
+func (m Model) fetchDocument(slug string, edit bool) tea.Cmd {
+	client, ctx := m.client, m.ctx
+	return func() tea.Msg {
+		doc, err := client.Document(ctx, slug)
+		if err != nil {
+			return softErrMsg{err}
+		}
+		return docLoadedMsg{doc: *doc, edit: edit}
+	}
+}
+
+func (m Model) createDocument(title string) tea.Cmd {
+	client, ctx := m.client, m.ctx
+	return func() tea.Msg {
+		doc, err := client.CreateDocument(ctx, title, "")
+		if err != nil {
+			return softErrMsg{err}
+		}
+		return docLoadedMsg{doc: *doc, edit: true} // straight into the editor
+	}
+}
+
+func (m Model) handleDocsKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	d := &m.docs
+	key := msg.String()
+
+	if d.conflict != nil {
+		switch key {
+		case "o": // overwrite: retry the save without the concurrency guard
+			conflict := *d.conflict
+			d.conflict = nil
+			return m, m.saveDocumentBody(conflict.slug, conflict.body, time.Time{})
+		case "esc", "q":
+			path := d.conflict.path
+			d.conflict = nil
+			d.editSlug, d.editPath, d.editBody = "", "", ""
+			return m, m.showToast("kept your copy at " + path)
+		}
+		return m, nil
+	}
+
+	if d.inputOpen {
+		switch key {
+		case "esc":
+			d.inputOpen = false
+			d.input.Blur()
+			return m, nil
+		case "enter":
+			title := strings.TrimSpace(d.input.Value())
+			if title == "" {
+				return m, nil
+			}
+			d.inputOpen = false
+			d.input.Blur()
+			d.input.SetValue("")
+			d.loading = true
+			return m, m.createDocument(title)
+		}
+		var cmd tea.Cmd
+		d.input, cmd = d.input.Update(msg)
+		return m, cmd
+	}
+
+	if d.viewing != nil {
+		switch key {
+		case "esc", "q":
+			d.viewing = nil
+			return m, nil
+		case "e":
+			return m.startDocEdit(*d.viewing)
+		case "y":
+			if err := copyToClipboard("[[doc:" + d.viewing.Slug + "]]"); err == nil {
+				return m, m.showToast("embed copied")
+			}
+			return m, nil
+		}
+		var cmd tea.Cmd
+		d.vp, cmd = d.vp.Update(msg)
+		return m, cmd
+	}
+
+	switch key {
+	case "esc", "q":
+		m.view = viewChat
+		m.focus = focusComposer
+		return m, m.comp.focus()
+	case "j", "down":
+		d.move(1)
+	case "k", "up":
+		d.move(-1)
+	case "enter":
+		if doc, ok := d.selected(); ok {
+			d.loading = true
+			return m, m.fetchDocument(doc.Slug, false)
+		}
+	case "e":
+		if doc, ok := d.selected(); ok {
+			d.loading = true
+			return m, m.fetchDocument(doc.Slug, true)
+		}
+	case "n":
+		d.inputOpen = true
+		return m, d.input.Focus()
+	case "y":
+		if doc, ok := d.selected(); ok {
+			if err := copyToClipboard("[[doc:" + doc.Slug + "]]"); err == nil {
+				return m, m.showToast("embed copied")
+			}
+		}
+	case "r":
+		d.loading = true
+		return m, m.fetchDocuments()
+	}
+	return m, nil
+}
+
+// startDocEdit writes the body to the crash-safe edit buffer and suspends
+// the TUI into the user's editor; editorFinishedMsg resumes the flow.
+func (m Model) startDocEdit(doc api.Document) (tea.Model, tea.Cmd) {
+	path, err := config.EditBufferPath(doc.Slug)
+	if err != nil {
+		m.softErr = "editor: " + err.Error()
+		return m, nil
+	}
+	if err := os.WriteFile(path, []byte(doc.Body), 0o600); err != nil {
+		m.softErr = "editor: " + err.Error()
+		return m, nil
+	}
+	m.docs.editSlug = doc.Slug
+	m.docs.editBase = doc.UpdatedAt
+	m.docs.editPath = path
+	m.docs.editBody = doc.Body
+
+	// Leave Stdin/Stdout nil — bubbletea wires the real TTY on release.
+	return m, tea.ExecProcess(config.EditorCommand(path), func(err error) tea.Msg {
+		return editorFinishedMsg{err}
+	})
+}
+
+func (m Model) handleEditorFinished(msg editorFinishedMsg) (tea.Model, tea.Cmd) {
+	d := &m.docs
+	slug, path := d.editSlug, d.editPath
+	if slug == "" {
+		return m, nil
+	}
+	if msg.err != nil {
+		m.softErr = "editor: " + msg.err.Error()
+		return m, nil // buffer file stays for recovery
+	}
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		m.softErr = "editor: " + err.Error()
+		return m, nil
+	}
+	body := string(raw)
+	if body == d.editBody {
+		_ = os.Remove(path)
+		d.editSlug, d.editPath, d.editBody = "", "", ""
+		return m, m.showToast("no changes")
+	}
+	return m, m.saveDocumentBody(slug, body, d.editBase)
+}
+
+func (m Model) saveDocumentBody(slug, body string, base time.Time) tea.Cmd {
+	client, ctx := m.client, m.ctx
+	path := m.docs.editPath
+	return func() tea.Msg {
+		doc, err := client.UpdateDocumentBody(ctx, slug, body, base)
+		if err != nil {
+			var apiErr *api.APIError
+			if errors.As(err, &apiErr) && apiErr.Code == "stale_document" {
+				return docConflictMsg{docConflict{slug: slug, path: path, body: body}}
+			}
+			return softErrMsg{err}
+		}
+		return docSavedMsg{*doc}
+	}
 }
 
 // ── Search ──────────────────────────────────────────────────────────────
@@ -1878,6 +2159,8 @@ func (m Model) View() string {
 		pane = m.notify.render(feedWidth, m.height-1)
 	case m.view == viewTasks:
 		pane = m.tasks.render(feedWidth, m.height-1)
+	case m.view == viewDocs:
+		pane = m.docs.render(feedWidth, m.height-1)
 	case m.threadPicker.active:
 		pane = m.renderThreadPicker(feedWidth)
 	default:

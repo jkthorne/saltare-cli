@@ -20,8 +20,10 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
+	"github.com/charmbracelet/glamour"
 	"github.com/google/uuid"
 	"golang.org/x/term"
 
@@ -57,6 +59,8 @@ func main() {
 		err = runSend(args)
 	case "search":
 		err = runSearch(args)
+	case "docs":
+		err = runDocs(args)
 	case "tasks":
 		err = runTasks(args)
 	case "ask":
@@ -92,6 +96,10 @@ usage:
   sal tail CHANNEL     stream a channel's messages to stdout
   sal search QUERY     search messages, tasks, and documents
                             --type T --channel SLUG --json
+  sal docs             list documents          --json
+  sal docs cat SLUG    print a document        --raw (default when piped)
+  sal docs edit SLUG   edit a document in $EDITOR   --force on conflicts
+  sal docs new TITLE   create a document       --body-file PATH (- = stdin)
   sal tasks            list your open tasks   --all --state S --json
   sal tasks complete SLUG   mark a task completed
   sal tasks add TITLE       create a task     --project SLUG
@@ -468,6 +476,218 @@ func parseTrailing(fs *flag.FlagSet, args []string) (string, error) {
 		positional = rest
 	}
 	return strings.Join(words, " "), nil
+}
+
+func runDocs(args []string) error {
+	if len(args) > 0 {
+		switch args[0] {
+		case "cat":
+			return docsCat(args[1:])
+		case "edit":
+			return docsEdit(args[1:])
+		case "new":
+			return docsNew(args[1:])
+		}
+	}
+
+	fs := flag.NewFlagSet("docs", flag.ExitOnError)
+	asJSON := fs.Bool("json", false, "print raw JSON")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
+	_, client, err := session()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := interruptContext()
+	defer cancel()
+
+	docs, err := client.Documents(ctx)
+	if err != nil {
+		return err
+	}
+	if *asJSON {
+		enc := json.NewEncoder(os.Stdout)
+		enc.SetIndent("", "  ")
+		return enc.Encode(docs)
+	}
+	for _, d := range docs {
+		published := " "
+		if d.Published {
+			published = "*"
+		}
+		fmt.Printf("%s %-28s %-12s %s\n", published, d.Slug, d.UpdatedAt.Local().Format("Jan 2 15:04"), d.Title)
+	}
+	return nil
+}
+
+func docsCat(args []string) error {
+	fs := flag.NewFlagSet("docs cat", flag.ExitOnError)
+	raw := fs.Bool("raw", false, "print raw markdown even on a TTY")
+	slug, err := slugAndFlags(fs, args, "sal docs cat SLUG")
+	if err != nil {
+		return err
+	}
+
+	_, client, err := session()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := interruptContext()
+	defer cancel()
+
+	doc, err := client.Document(ctx, slug)
+	if err != nil {
+		return err
+	}
+
+	if *raw || !term.IsTerminal(int(os.Stdout.Fd())) {
+		fmt.Print(doc.Body)
+		if !strings.HasSuffix(doc.Body, "\n") {
+			fmt.Println()
+		}
+		return nil
+	}
+
+	width, _, sizeErr := term.GetSize(int(os.Stdout.Fd()))
+	if sizeErr != nil || width <= 0 || width > 120 {
+		width = 100
+	}
+	renderer, err := glamour.NewTermRenderer(glamour.WithStandardStyle("dark"), glamour.WithWordWrap(width-2))
+	if err != nil {
+		fmt.Println(doc.Body)
+		return nil
+	}
+	out, err := renderer.Render("# " + doc.Title + "\n\n" + doc.Body)
+	if err != nil {
+		fmt.Println(doc.Body)
+		return nil
+	}
+	fmt.Print(out)
+	return nil
+}
+
+func docsEdit(args []string) error {
+	fs := flag.NewFlagSet("docs edit", flag.ExitOnError)
+	force := fs.Bool("force", false, "save even if the document changed on the server")
+	slug, err := slugAndFlags(fs, args, "sal docs edit SLUG")
+	if err != nil {
+		return err
+	}
+
+	_, client, err := session()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := interruptContext()
+	defer cancel()
+
+	doc, err := client.Document(ctx, slug)
+	if err != nil {
+		return err
+	}
+	path, err := config.EditBufferPath(doc.Slug)
+	if err != nil {
+		return err
+	}
+	if err := os.WriteFile(path, []byte(doc.Body), 0o600); err != nil {
+		return err
+	}
+
+	cmd := config.EditorCommand(path)
+	cmd.Stdin, cmd.Stdout, cmd.Stderr = os.Stdin, os.Stdout, os.Stderr
+	if err := cmd.Run(); err != nil {
+		return fmt.Errorf("editor: %w (your buffer is at %s)", err, path)
+	}
+
+	edited, err := os.ReadFile(path)
+	if err != nil {
+		return err
+	}
+	if string(edited) == doc.Body {
+		_ = os.Remove(path)
+		fmt.Println("no changes")
+		return nil
+	}
+
+	base := doc.UpdatedAt
+	if *force {
+		base = time.Time{}
+	}
+	updated, err := client.UpdateDocumentBody(ctx, slug, string(edited), base)
+	if err != nil {
+		var apiErr *api.APIError
+		if errors.As(err, &apiErr) && apiErr.Code == "stale_document" {
+			return fmt.Errorf("document changed on the server; your edit is preserved at %s — re-run with --force to overwrite", path)
+		}
+		return fmt.Errorf("%w (your edit is preserved at %s)", err, path)
+	}
+	_ = os.Remove(path)
+	fmt.Printf("saved %s (updated %s)\n", updated.Slug, updated.UpdatedAt.Local().Format("15:04:05"))
+	return nil
+}
+
+func docsNew(args []string) error {
+	fs := flag.NewFlagSet("docs new", flag.ExitOnError)
+	bodyFile := fs.String("body-file", "", "read the body from a file (- = stdin)")
+	title, err := parseTrailing(fs, args)
+	if err != nil {
+		return err
+	}
+	if title == "" {
+		return fmt.Errorf("usage: sal docs new TITLE [--body-file PATH]")
+	}
+
+	body := ""
+	switch *bodyFile {
+	case "":
+	case "-":
+		raw, err := io.ReadAll(os.Stdin)
+		if err != nil {
+			return err
+		}
+		body = string(raw)
+	default:
+		raw, err := os.ReadFile(*bodyFile)
+		if err != nil {
+			return err
+		}
+		body = string(raw)
+	}
+
+	_, client, err := session()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := interruptContext()
+	defer cancel()
+
+	doc, err := client.CreateDocument(ctx, title, body)
+	if err != nil {
+		return err
+	}
+	fmt.Printf("created %s: %s\n", doc.Slug, doc.Title)
+	return nil
+}
+
+// slugAndFlags accepts the slug before or after flags (the runTail idiom).
+func slugAndFlags(fs *flag.FlagSet, args []string, usage string) (string, error) {
+	slug := ""
+	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+		slug = args[0]
+		args = args[1:]
+	}
+	if err := fs.Parse(args); err != nil {
+		return "", err
+	}
+	if slug == "" {
+		slug = fs.Arg(0)
+	}
+	if slug == "" {
+		return "", fmt.Errorf("usage: %s", usage)
+	}
+	return slug, nil
 }
 
 func runTasks(args []string) error {

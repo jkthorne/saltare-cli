@@ -29,6 +29,7 @@ const (
 	actionNotifications = "notifications"
 	actionAssistant     = "assistant"
 	actionSearch        = "search"
+	actionDocs          = "docs"
 )
 
 type palette struct {
