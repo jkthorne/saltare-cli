@@ -115,13 +115,20 @@ description); from there `enter`/`o` drops into the task's **discussion
 channel** (joining you so unread tracking works), `x` completes, `s`
 cycles the state, `y` copies the `[[task:slug]]` embed.
 
-**Files & data** (CLI-only): `sal files put deploy.log` from any server
-pushes into the workspace; `sal files get` pulls an attachment without a
-browser (downloads follow the presigned storage redirect — your token
-never leaves the app host — and never leave truncated files behind).
-`sal db rows crm --csv` dumps a table for spreadsheets;
-`sal db rows crm --json | jq '.[].data'` gives scripts typed cells. Both
-`put` and `docs edit` need a session minted after their scopes joined the
+**Files & data**: the palette opens both as full TUI views. **Files**:
+browse uploads, `d` downloads to your current directory, `u` uploads by
+typed path (`~` works), `x` deletes behind a confirm, `y` copies the
+embed. **Databases**: pick a table, browse it as a real grid (`h/l` pans
+columns, `o` loads more rows), `enter` a row for its detail — and `enter`
+a field to **edit the cell in place** (the server types your input per
+column; formula columns are read-only). Search results and
+`[[upload:…]]`/`[[db:…]]` embeds jump straight into both views.
+
+From scripts, the same power: `sal files put deploy.log` from any server
+(downloads follow the presigned storage redirect — your token never
+leaves the app host — and never leave truncated files behind);
+`sal db rows crm --csv` for spreadsheets, `--json | jq '.[].data'` for
+typed cells. Writes need a session minted after their scopes joined the
 CLI grant — if sal says re-run `sal login`, one login fixes everything.
 
 Unsent composer text is a **draft**: it survives channel switches, quits,
