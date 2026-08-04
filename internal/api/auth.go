@@ -64,17 +64,20 @@ func Login(ctx context.Context, p LoginParams) (*DeviceSession, error) {
 	defer resp.Body.Close()
 
 	if resp.StatusCode == http.StatusConflict {
+		// render_api_error deep-merges `extra` into the error object, so the
+		// list lives at error.workspaces — NOT error.extra.workspaces.
 		var envelope struct {
 			Error struct {
-				Extra struct {
-					Workspaces []WorkspaceChoice `json:"workspaces"`
-				} `json:"extra"`
+				Workspaces []WorkspaceChoice `json:"workspaces"`
 			} `json:"error"`
 		}
 		if err := json.NewDecoder(resp.Body).Decode(&envelope); err != nil {
 			return nil, err
 		}
-		return nil, &WorkspaceSelectionError{Choices: envelope.Error.Extra.Workspaces}
+		if len(envelope.Error.Workspaces) == 0 {
+			return nil, fmt.Errorf("workspace selection required, but the server sent no choices (wire format drift?)")
+		}
+		return nil, &WorkspaceSelectionError{Choices: envelope.Error.Workspaces}
 	}
 	if resp.StatusCode >= 400 {
 		return nil, decodeError(resp)

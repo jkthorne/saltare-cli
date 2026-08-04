@@ -17,6 +17,7 @@ import (
 	"io"
 	"os"
 	"os/signal"
+	"strconv"
 	"strings"
 	"syscall"
 
@@ -173,10 +174,12 @@ func runLogin(args []string) error {
 	}
 
 	// Reuse this install's device id so re-login replaces the session
-	// instead of stacking new ones.
-	deviceID := ""
-	if prev, err := config.Load(); err == nil && prev.DeviceID != "" {
+	// instead of stacking new ones; remember the previous workspace so the
+	// picker can offer it as the default.
+	deviceID, prevWorkspace := "", ""
+	if prev, err := config.Load(); err == nil {
 		deviceID = prev.DeviceID
+		prevWorkspace = prev.WorkspaceSlug
 	}
 	if deviceID == "" {
 		deviceID = uuid.NewString()
@@ -201,20 +204,11 @@ func runLogin(args []string) error {
 
 	var choice *api.WorkspaceSelectionError
 	if errors.As(err, &choice) {
-		fmt.Println("\nyour account belongs to several workspaces:")
-		for i, w := range choice.Choices {
-			fmt.Printf("  %d. %s (%s)\n", i+1, w.Name, w.Slug)
+		slug, perr := pickWorkspace(reader, os.Stdout, choice.Choices, prevWorkspace)
+		if perr != nil {
+			return perr
 		}
-		fmt.Print("workspace number: ")
-		line, rerr := reader.ReadString('\n')
-		if rerr != nil {
-			return rerr
-		}
-		var n int
-		if _, perr := fmt.Sscanf(strings.TrimSpace(line), "%d", &n); perr != nil || n < 1 || n > len(choice.Choices) {
-			return fmt.Errorf("invalid choice")
-		}
-		params.WorkspaceSlug = choice.Choices[n-1].Slug
+		params.WorkspaceSlug = slug
 		sess, err = api.Login(ctx, params)
 	}
 	if err != nil {
@@ -243,6 +237,63 @@ func runLogin(args []string) error {
 
 	fmt.Printf("signed in to %s as %s — run `sal` to start\n", sess.Workspace.Name, sess.User.Email)
 	return nil
+}
+
+// pickWorkspace prompts until a valid selection: a list number, a slug, or
+// enter for the default (the previously used workspace, when listed). Bad
+// input re-prompts — it must never abort the login and force email+password
+// again. EOF (piped stdin running dry, ctrl+d) returns an error.
+func pickWorkspace(in *bufio.Reader, out io.Writer, choices []api.WorkspaceChoice, defaultSlug string) (string, error) {
+	def := ""
+	for _, w := range choices {
+		if w.Slug == defaultSlug {
+			def = w.Slug
+		}
+	}
+
+	fmt.Fprintln(out, "\nyour account belongs to several workspaces:")
+	for i, w := range choices {
+		marker := "  "
+		if w.Slug == def {
+			marker = "* "
+		}
+		fmt.Fprintf(out, "  %s%d. %s (%s)\n", marker, i+1, w.Name, w.Slug)
+	}
+	fmt.Fprintln(out, "  tip: `sal login --workspace SLUG` skips this prompt")
+
+	for {
+		if def != "" {
+			fmt.Fprintf(out, "workspace number or slug [%s]: ", def)
+		} else {
+			fmt.Fprint(out, "workspace number or slug: ")
+		}
+
+		line, readErr := in.ReadString('\n')
+		input := strings.TrimSpace(line)
+
+		switch {
+		case input == "" && def != "":
+			return def, nil
+		case input != "":
+			if n, err := strconv.Atoi(input); err == nil {
+				if n >= 1 && n <= len(choices) {
+					return choices[n-1].Slug, nil
+				}
+				fmt.Fprintf(out, "  pick a number between 1 and %d\n", len(choices))
+			} else {
+				for _, w := range choices {
+					if strings.EqualFold(input, w.Slug) {
+						return w.Slug, nil
+					}
+				}
+				fmt.Fprintf(out, "  %q is not a listed number or slug\n", input)
+			}
+		}
+
+		if readErr != nil {
+			return "", fmt.Errorf("no workspace selected")
+		}
+	}
 }
 
 func runLogout() error {

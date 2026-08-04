@@ -6,6 +6,7 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 
 	"github.com/jkthorne/saltare/cli/internal/config"
@@ -93,13 +94,16 @@ func TestLoginWorkspaceSelection(t *testing.T) {
 			t.Errorf("want platform cli, got %q", body["platform"])
 		}
 		if body["workspace_slug"] == "" {
+			// Mirrors render_api_error's real shape: extra keys are merged
+			// into the error object (error.workspaces, not error.extra.*).
 			w.WriteHeader(http.StatusConflict)
 			json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{
-				"code": "workspace_selection_required",
-				"extra": map[string]any{"workspaces": []map[string]any{
+				"code":    "workspace_selection_required",
+				"message": "Choose a workspace to sign into, then retry with workspace_slug.",
+				"workspaces": []map[string]any{
 					{"id": 1, "slug": "acme", "name": "Acme"},
 					{"id": 2, "slug": "beta", "name": "Beta"},
-				}},
+				},
 			}})
 			return
 		}
@@ -131,6 +135,27 @@ func TestLoginWorkspaceSelection(t *testing.T) {
 	}
 	if sess.Workspace.Slug != "beta" || sess.AccessToken != "at" {
 		t.Fatalf("unexpected session: %+v", sess)
+	}
+}
+
+// TestLoginRejectsEmptyWorkspaceList: a 409 with no choices is an explicit
+// error, never an empty picker.
+func TestLoginRejectsEmptyWorkspaceList(t *testing.T) {
+	mux := http.NewServeMux()
+	mux.HandleFunc("POST /api/v1/auth/token", func(w http.ResponseWriter, r *http.Request) {
+		w.WriteHeader(http.StatusConflict)
+		json.NewEncoder(w).Encode(map[string]any{"error": map[string]any{"code": "workspace_selection_required"}})
+	})
+	srv := httptest.NewServer(mux)
+	defer srv.Close()
+
+	_, err := Login(context.Background(), LoginParams{ServerURL: srv.URL, Email: "a@b.c", Password: "pw"})
+	var choice *WorkspaceSelectionError
+	if errors.As(err, &choice) {
+		t.Fatal("empty choice list must not become a WorkspaceSelectionError")
+	}
+	if err == nil || !strings.Contains(err.Error(), "no choices") {
+		t.Fatalf("want explicit no-choices error, got %v", err)
 	}
 }
 
