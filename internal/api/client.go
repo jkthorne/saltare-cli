@@ -13,6 +13,7 @@ import (
 	"io"
 	"net/http"
 	"net/url"
+	"regexp"
 	"strings"
 	"sync"
 	"time"
@@ -38,10 +39,17 @@ func (e *APIError) Error() string {
 		if e.Code == "missing_scope" {
 			return fmt.Sprintf("%s (%s) — this session predates the capability; re-run `sal login`", e.Message, e.Code)
 		}
-		return fmt.Sprintf("%s (%s)", e.Message, e.Code)
+		message := e.Message
+		// plan_limit messages embed an upgrade <a> for the web UI.
+		if e.Code == "plan_limit" {
+			message = strings.Join(strings.Fields(htmlTagPattern.ReplaceAllString(message, " ")), " ")
+		}
+		return fmt.Sprintf("%s (%s)", message, e.Code)
 	}
 	return fmt.Sprintf("api error: HTTP %d", e.Status)
 }
+
+var htmlTagPattern = regexp.MustCompile(`<[^>]*>`)
 
 type Client struct {
 	base *url.URL
