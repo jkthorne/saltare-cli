@@ -14,6 +14,7 @@ import (
 	"github.com/charmbracelet/lipgloss"
 
 	"github.com/jkthorne/saltare/cli/internal/api"
+	"github.com/jkthorne/saltare/cli/internal/assist"
 	"github.com/jkthorne/saltare/cli/internal/cable"
 	"github.com/jkthorne/saltare/cli/internal/config"
 	"github.com/jkthorne/saltare/cli/internal/store"
@@ -270,8 +271,10 @@ func (m Model) fetchNotifications() tea.Cmd {
 	}
 }
 
-// startAssist launches one streaming completion; deltas cross into the tea
-// loop over the assistant's event channel (same pattern as cable).
+// startAssist launches one tool-loop turn; text deltas and tool traces
+// cross into the tea loop over the assistant's event channel (same pattern
+// as cable). Tool execution happens in the goroutine, against the REST API
+// as the signed-in user.
 func (m *Model) startAssist(question string) tea.Cmd {
 	m.assist.pushUser(question)
 	m.assist.streaming = true
@@ -280,17 +283,21 @@ func (m *Model) startAssist(question string) tea.Cmd {
 
 	client, ctx := m.client, m.ctx
 	events := m.assist.events
-	req := api.InferenceRequest{
-		Model:    assistDefaultModel,
-		System:   assistSystemPrompt(m.cfg.WorkspaceName),
-		Messages: append([]api.InferenceMessage(nil), m.assist.turns...),
+	exec := &assist.Executor{Client: client, UserID: m.cfg.UserID}
+	history := append([]api.InferenceMessage(nil), m.assist.turns...)
+	opts := assist.LoopOpts{
+		Model:  assistDefaultModel,
+		System: assist.SystemPrompt(m.cfg.WorkspaceName, m.cfg.UserName, true),
+		Tools:  assist.Tools(),
+		OnText: func(d string) { events <- assistEvent{delta: d} },
+		OnTool: func(name string, input map[string]any) {
+			events <- assistEvent{tool: toolCallLine(api.ContentBlock{Name: name, Input: input})}
+		},
 	}
 	stream := func() tea.Msg {
 		go func() {
-			res, err := client.StreamInference(ctx, req, func(d string) {
-				events <- assistEvent{delta: d}
-			})
-			ev := assistEvent{done: true, err: err}
+			turns, res, err := assist.RunLoop(ctx, client, exec, history, opts)
+			ev := assistEvent{done: true, err: err, turns: turns}
 			if res != nil {
 				ev.full = res.Text
 				ev.usage = &res.Usage
@@ -504,20 +511,30 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 func (m Model) handleAssistEvent(ev assistEvent) (tea.Model, tea.Cmd) {
 	if ev.done {
 		m.assist.streaming = false
+		// The loop returns the full history (assistant turns, tool calls,
+		// and tool results included) — adopt it, pair-aware-trimmed.
+		if ev.turns != nil {
+			m.assist.turns = assist.TrimTurns(ev.turns, assistMaxTurns)
+		}
 		if ev.err != nil {
 			m.softErr = "assistant: " + ev.err.Error()
 			if ev.full != "" {
 				m.assist.pushAssistant(ev.full) // keep the partial answer
 			}
-		} else {
-			m.assist.pushAssistant(ev.full)
-			if ev.usage != nil {
-				m.assist.usageLine = fmt.Sprintf("· %d in → %d out tokens", ev.usage.InputTokens, ev.usage.OutputTokens)
-			}
+		} else if ev.usage != nil {
+			m.assist.usageLine = fmt.Sprintf("· %d in → %d out tokens", ev.usage.InputTokens, ev.usage.OutputTokens)
 		}
 		m.assist.events = nil
 		m.refreshAssist()
 		return m, nil
+	}
+	if ev.tool != "" {
+		if m.assist.current != "" && !strings.HasSuffix(m.assist.current, "\n") {
+			m.assist.current += "\n"
+		}
+		m.assist.current += "◇ " + ev.tool + "\n"
+		m.refreshAssist()
+		return m, m.waitAssist()
 	}
 	m.assist.current += ev.delta
 	m.refreshAssist()

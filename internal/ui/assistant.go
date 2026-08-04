@@ -6,6 +6,7 @@ import (
 	"strings"
 
 	"github.com/jkthorne/saltare/cli/internal/api"
+	"github.com/jkthorne/saltare/cli/internal/assist"
 )
 
 // assistDefaultModel is served by the inference proxy on every plan tier and
@@ -16,8 +17,10 @@ const assistMaxTurns = 20
 // assistEvent crosses from the streaming goroutine into the tea loop.
 type assistEvent struct {
 	delta string
+	tool  string // pre-formatted trace line: a tool is about to run
 	done  bool
 	full  string
+	turns []api.InferenceMessage // full history after the loop (done only)
 	usage *api.InferenceUsage
 	err   error
 }
@@ -34,23 +37,11 @@ type assistant struct {
 }
 
 func (a *assistant) pushUser(q string) {
-	a.turns = append(a.turns, api.InferenceMessage{Role: "user", Content: q})
-	if len(a.turns) > assistMaxTurns {
-		a.turns = a.turns[len(a.turns)-assistMaxTurns:]
-	}
+	a.turns = assist.TrimTurns(append(a.turns, api.TextMessage("user", q)), assistMaxTurns)
 }
 
 func (a *assistant) pushAssistant(text string) {
-	a.turns = append(a.turns, api.InferenceMessage{Role: "assistant", Content: text})
-	if len(a.turns) > assistMaxTurns {
-		a.turns = a.turns[len(a.turns)-assistMaxTurns:]
-	}
-}
-
-func assistSystemPrompt(workspaceName string) string {
-	return "You are the built-in assistant of sal, the terminal client for the Saltare workspace \"" +
-		workspaceName + "\". Be concise. Plain text or simple markdown only — it renders in a terminal. " +
-		"You cannot run tools or read workspace data yet; say so if asked."
+	a.turns = assist.TrimTurns(append(a.turns, api.TextMessage("assistant", text)), assistMaxTurns)
 }
 
 // render builds the transcript pane content. markdown renders completed

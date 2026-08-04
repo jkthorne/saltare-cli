@@ -25,6 +25,8 @@ type Config struct {
 	DeviceID string `json:"device_id"`
 	// UserID of the signed-in user — used to self-assign tasks created here.
 	UserID int64 `json:"user_id"`
+	// UserName of the signed-in user (empty on configs from older logins).
+	UserName string `json:"user_name,omitempty"`
 }
 
 // Dir returns ~/.config/saltare, creating it if needed. Deliberately not

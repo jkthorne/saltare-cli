@@ -26,6 +26,7 @@ import (
 	"golang.org/x/term"
 
 	"github.com/jkthorne/saltare/cli/internal/api"
+	"github.com/jkthorne/saltare/cli/internal/assist"
 	"github.com/jkthorne/saltare/cli/internal/cable"
 	"github.com/jkthorne/saltare/cli/internal/config"
 	"github.com/jkthorne/saltare/cli/internal/ui"
@@ -222,6 +223,7 @@ func runLogin(args []string) error {
 		Email:         sess.User.Email,
 		DeviceID:      deviceID,
 		UserID:        sess.User.ID,
+		UserName:      sess.User.Name,
 	}
 	if err := cfg.Save(); err != nil {
 		return err
@@ -504,6 +506,7 @@ func taskAdd(args []string) error {
 func runAsk(args []string) error {
 	fs := flag.NewFlagSet("ask", flag.ExitOnError)
 	model := fs.String("model", "claude-haiku-4-5", "Claude model id")
+	noTools := fs.Bool("no-tools", false, "answer without workspace tools (chat only)")
 	if err := fs.Parse(args); err != nil {
 		return err
 	}
@@ -526,16 +529,23 @@ func runAsk(args []string) error {
 	ctx, cancel := interruptContext()
 	defer cancel()
 
-	req := api.InferenceRequest{
+	// Answer streams to stdout; tool traces and usage go to stderr so
+	// pipelines stay clean.
+	exec := &assist.Executor{Client: client, UserID: cfg.UserID}
+	opts := assist.LoopOpts{
 		Model:  *model,
-		System: "You are sal, answering one-shot questions in a terminal for the Saltare workspace \"" + cfg.WorkspaceName + "\". Be concise; plain text only.",
-		Messages: []api.InferenceMessage{
-			{Role: "user", Content: question},
+		System: assist.SystemPrompt(cfg.WorkspaceName, cfg.UserName, !*noTools),
+		OnText: func(delta string) { fmt.Print(delta) },
+		OnTool: func(name string, input map[string]any) {
+			args, _ := json.Marshal(input)
+			fmt.Fprintf(os.Stderr, "◇ %s %s\n", name, args)
 		},
 	}
-	res, err := client.StreamInference(ctx, req, func(delta string) {
-		fmt.Print(delta)
-	})
+	if !*noTools {
+		opts.Tools = assist.Tools()
+	}
+	_, res, err := assist.RunLoop(ctx, client, exec,
+		[]api.InferenceMessage{api.TextMessage("user", question)}, opts)
 	fmt.Println()
 	if err != nil {
 		return err
