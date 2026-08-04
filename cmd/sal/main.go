@@ -101,8 +101,9 @@ usage:
   sal docs edit SLUG   edit a document in $EDITOR   --force on conflicts
   sal docs new TITLE   create a document       --body-file PATH (- = stdin)
   sal tasks            list your open tasks   --all --state S --json
+  sal tasks show SLUG       print a task's detail
   sal tasks complete SLUG   mark a task completed
-  sal tasks add TITLE       create a task     --project SLUG
+  sal tasks add TITLE       create a task     --project SLUG --due YYYY-MM-DD --priority P
   sal ask QUESTION     ask Claude, grounded in your workspace via tools
                             --model M (default claude-haiku-4-5) --no-tools
   sal version
@@ -700,6 +701,11 @@ func runTasks(args []string) error {
 			return taskComplete(args[1])
 		case "add":
 			return taskAdd(args[1:])
+		case "show":
+			if len(args) != 2 {
+				return fmt.Errorf("usage: sal tasks show SLUG")
+			}
+			return taskShow(args[1])
 		}
 	}
 
@@ -756,12 +762,24 @@ func taskComplete(slug string) error {
 func taskAdd(args []string) error {
 	fs := flag.NewFlagSet("tasks add", flag.ExitOnError)
 	projectSlug := fs.String("project", "", "project slug (defaults to the only/first project)")
-	if err := fs.Parse(args); err != nil {
+	due := fs.String("due", "", "due date, YYYY-MM-DD")
+	priority := fs.String("priority", "", "none, low, medium, high, or urgent")
+	title, err := parseTrailing(fs, args)
+	if err != nil {
 		return err
 	}
-	title := strings.TrimSpace(strings.Join(fs.Args(), " "))
 	if title == "" {
-		return fmt.Errorf("usage: sal tasks add TITLE [--project SLUG]")
+		return fmt.Errorf("usage: sal tasks add TITLE [--project SLUG] [--due YYYY-MM-DD] [--priority P]")
+	}
+	if *due != "" {
+		if _, err := time.Parse("2006-01-02", *due); err != nil {
+			return fmt.Errorf("--due must be YYYY-MM-DD")
+		}
+	}
+	switch *priority {
+	case "", "none", "low", "medium", "high", "urgent":
+	default:
+		return fmt.Errorf("--priority must be none, low, medium, high, or urgent")
 	}
 
 	cfg, client, err := session()
@@ -792,11 +810,50 @@ func taskAdd(args []string) error {
 		}
 	}
 
-	task, err := client.CreateTask(ctx, project.ID, title, cfg.UserID, api.TaskCreateOpts{})
+	task, err := client.CreateTask(ctx, project.ID, title, cfg.UserID, api.TaskCreateOpts{DueDate: *due, Priority: *priority})
 	if err != nil {
 		return err
 	}
 	fmt.Printf("created %s in %s: %s\n", task.Slug, project.Name, task.Title)
+	return nil
+}
+
+func taskShow(slug string) error {
+	_, client, err := session()
+	if err != nil {
+		return err
+	}
+	ctx, cancel := interruptContext()
+	defer cancel()
+
+	task, err := client.Task(ctx, slug)
+	if err != nil {
+		return err
+	}
+
+	fmt.Printf("%s  [%s]\n", task.Title, task.State)
+	fmt.Printf("slug: %s\n", task.Slug)
+	if task.Priority != nil && *task.Priority != "none" {
+		fmt.Printf("priority: %s\n", *task.Priority)
+	}
+	if task.Assignee != nil {
+		fmt.Printf("assignee: %s #%d\n", strings.ToLower(task.Assignee.Type), task.Assignee.ID)
+	}
+	if task.StartDate != nil && *task.StartDate != "" {
+		fmt.Printf("start: %s\n", *task.StartDate)
+	}
+	if task.DueDate != nil && *task.DueDate != "" {
+		fmt.Printf("due: %s\n", *task.DueDate)
+	}
+	if task.SubtasksCount > 0 {
+		fmt.Printf("subtasks: %d\n", task.SubtasksCount)
+	}
+	if task.DiscussionChannelSlug != nil {
+		fmt.Printf("discussion: %s\n", *task.DiscussionChannelSlug)
+	}
+	if task.Description != nil && strings.TrimSpace(*task.Description) != "" {
+		fmt.Printf("\n%s\n", strings.TrimSpace(*task.Description))
+	}
 	return nil
 }
 

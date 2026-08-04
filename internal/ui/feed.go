@@ -182,8 +182,25 @@ func (r *feedRenderer) systemEvent(m *api.Message) string {
 	if who != "" {
 		who += " "
 	}
-	line := fmt.Sprintf("· %s%s  %s", who, event, m.CreatedAt.Local().Format("15:04"))
+	line := fmt.Sprintf("· %s%s%s  %s", who, event, eventContext(m.Metadata), m.CreatedAt.Local().Format("15:04"))
 	return styleSystemEvent.Render(line) + "\n"
+}
+
+// eventContext compacts system-event metadata: state/priority changes show
+// "from → to", assignments show who.
+func eventContext(metadata map[string]any) string {
+	if metadata == nil {
+		return ""
+	}
+	from, fromOK := metadata["from"].(string)
+	to, toOK := metadata["to"].(string)
+	if fromOK && toOK {
+		return fmt.Sprintf(" %s → %s", from, to)
+	}
+	if name, ok := metadata["assignee_name"].(string); ok && name != "" {
+		return " → " + name
+	}
+	return ""
 }
 
 func (r *feedRenderer) dateSeparator(t time.Time) string {

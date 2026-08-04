@@ -75,6 +75,7 @@ type projectsLoadedMsg struct{ projects []api.Project }
 type taskChangedMsg struct{ task api.Task }
 type notificationsLoadedMsg struct{ items []api.Notification }
 type notificationsClearedMsg struct{}
+type discussionLoadedMsg struct{ channel api.Channel }
 type docsLoadedMsg struct{ docs []api.Document }
 type docLoadedMsg struct {
 	doc  api.Document
@@ -287,6 +288,32 @@ func (m Model) toggleTask(task api.Task) tea.Cmd {
 	}
 }
 
+func (m Model) setTaskState(task api.Task, state string) tea.Cmd {
+	client, ctx := m.client, m.ctx
+	return func() tea.Msg {
+		updated, err := client.UpdateTaskState(ctx, task.Slug, state)
+		if err != nil {
+			return softErrMsg{err}
+		}
+		return taskChangedMsg{*updated}
+	}
+}
+
+// openTaskDiscussion goes through the find-or-create endpoint every time —
+// it's idempotent and joins the caller, so unread tracking works even for
+// tasks that predate discussion channels.
+func (m Model) openTaskDiscussion(task api.Task) (tea.Model, tea.Cmd) {
+	client, ctx := m.client, m.ctx
+	slug := task.Slug
+	return m, func() tea.Msg {
+		channel, err := client.TaskDiscussion(ctx, slug)
+		if err != nil {
+			return softErrMsg{err}
+		}
+		return discussionLoadedMsg{*channel}
+	}
+}
+
 func (m Model) createTask(projectID int64, title string) tea.Cmd {
 	client, ctx, userID := m.client, m.ctx, m.cfg.UserID
 	return func() tea.Msg {
@@ -496,7 +523,16 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		return m, nil
 
 	case taskChangedMsg:
+		if m.tasks.detail != nil && m.tasks.detail.ID == msg.task.ID {
+			changed := msg.task
+			m.tasks.detail = &changed
+		}
 		return m, m.fetchTasks()
+
+	case discussionLoadedMsg:
+		m.view = viewChat
+		m.tasks.detail = nil
+		return m.openThread(msg.channel)
 
 	case notificationsLoadedMsg:
 		m.notify.active = true
@@ -1164,6 +1200,25 @@ func (m Model) handleTasksKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	t := &m.tasks
 	key := msg.String()
 
+	if t.detail != nil {
+		task := *t.detail
+		switch key {
+		case "esc", "q":
+			t.detail = nil
+		case "enter", "o":
+			return m.openTaskDiscussion(task)
+		case "x":
+			return m, m.toggleTask(task)
+		case "s":
+			return m, m.setTaskState(task, nextTaskState(task.State))
+		case "y":
+			if err := copyToClipboard("[[task:" + task.Slug + "]]"); err == nil {
+				return m, m.showToast("embed copied")
+			}
+		}
+		return m, nil
+	}
+
 	if t.inputOpen && t.pickOpen {
 		switch key {
 		case "esc":
@@ -1224,7 +1279,12 @@ func (m Model) handleTasksKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		t.move(1)
 	case "k", "up":
 		t.move(-1)
-	case "x", "enter":
+	case "enter":
+		if task, ok := t.selected(); ok {
+			selected := task
+			t.detail = &selected
+		}
+	case "x":
 		if task, ok := t.selected(); ok {
 			return m, m.toggleTask(task)
 		}
@@ -2158,7 +2218,7 @@ func (m Model) View() string {
 	case m.notify.active:
 		pane = m.notify.render(feedWidth, m.height-1)
 	case m.view == viewTasks:
-		pane = m.tasks.render(feedWidth, m.height-1)
+		pane = m.tasks.render(m.renderer, feedWidth, m.height-1)
 	case m.view == viewDocs:
 		pane = m.docs.render(feedWidth, m.height-1)
 	case m.threadPicker.active:

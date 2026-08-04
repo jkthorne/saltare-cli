@@ -21,6 +21,8 @@ type tasksView struct {
 
 	projects []api.Project
 
+	detail *api.Task // non-nil = detail pane open
+
 	// New-task flow: title input, then a project pick when several exist.
 	inputOpen    bool
 	input        textinput.Model
@@ -91,7 +93,11 @@ func (t *tasksView) projectName(id int64) string {
 	return ""
 }
 
-func (t *tasksView) render(width, height int) string {
+func (t *tasksView) render(r *feedRenderer, width, height int) string {
+	if t.detail != nil {
+		return t.renderDetail(r, width, height)
+	}
+
 	scope := "mine"
 	if !t.mine {
 		scope = "all"
@@ -125,9 +131,94 @@ func (t *tasksView) render(width, height int) string {
 		}
 	}
 
-	rows = append(rows, "", styleFeedTopic.Render("j/k move · x done/reopen · n new · m mine/all · r refresh · esc chat"))
+	rows = append(rows, "", styleFeedTopic.Render("j/k move · enter detail · x done/reopen · n new · m mine/all · r refresh · esc chat"))
 	body := strings.Join(rows, "\n")
 	return styleTasksPane.Width(width).Height(height).MaxHeight(height).Render(body)
+}
+
+// renderDetail mirrors the web task page hierarchy: title, state facts,
+// dates, description, subtasks — with the discussion one keystroke away.
+func (t *tasksView) renderDetail(r *feedRenderer, width, height int) string {
+	task := t.detail
+	today := time.Now().Format("2006-01-02")
+
+	title := stateGlyph(task.State) + " " + task.Title
+	titleStyle := styleFeedTitle
+	if task.State == "completed" || task.State == "cancelled" {
+		titleStyle = styleTaskDone
+	}
+
+	var rows []string
+	rows = append(rows, titleStyle.Render(truncate(title, width-6)))
+	breadcrumb := task.Slug
+	if name := t.projectName(task.ProjectID); name != "" {
+		breadcrumb = name + " ▸ " + breadcrumb
+	}
+	rows = append(rows, styleFeedTopic.Render(breadcrumb), "")
+
+	facts := []string{"state: " + task.State}
+	if task.Priority != nil && *task.Priority != "none" {
+		facts = append(facts, "priority: "+*task.Priority)
+	}
+	if task.Assignee != nil {
+		facts = append(facts, fmt.Sprintf("assignee: %s #%d", strings.ToLower(task.Assignee.Type), task.Assignee.ID))
+	}
+	rows = append(rows, stylePickerRow.Render(strings.Join(facts, "  ·  ")))
+
+	var dates []string
+	if task.StartDate != nil && *task.StartDate != "" {
+		dates = append(dates, "start "+*task.StartDate)
+	}
+	if task.DueDate != nil && *task.DueDate != "" {
+		due := "due " + *task.DueDate
+		if *task.DueDate < today && task.State != "completed" && task.State != "cancelled" {
+			due = styleTaskOverdue.Render(due + " ⊗ overdue")
+		}
+		dates = append(dates, due)
+	}
+	if task.ReminderAt != nil {
+		dates = append(dates, "reminder "+task.ReminderAt.Local().Format("Jan 2 15:04"))
+	}
+	if len(dates) > 0 {
+		rows = append(rows, stylePickerRow.Render(strings.Join(dates, "  ·  ")))
+	}
+	if task.SubtasksCount > 0 {
+		rows = append(rows, stylePickerRow.Render(fmt.Sprintf("subtasks: %d", task.SubtasksCount)))
+	}
+	rows = append(rows, "")
+
+	if task.Description != nil && strings.TrimSpace(*task.Description) != "" {
+		desc := strings.TrimSpace(*task.Description)
+		rendered := ""
+		if r != nil && r.markdown != nil {
+			if out, err := r.markdown.Render(desc); err == nil {
+				rendered = renderEmbedChips(strings.Trim(out, "\n"))
+			}
+		}
+		if rendered == "" {
+			rendered = renderEmbedChips(wrapPlain(desc, width-6))
+		}
+		rows = append(rows, rendered)
+	} else {
+		rows = append(rows, styleFeedTopic.Render("(no description)"))
+	}
+
+	rows = append(rows, "", styleFeedTopic.Render("enter/o discussion · x done/reopen · s next state · y copy embed · esc back"))
+	return styleTasksPane.Width(width).Height(height).MaxHeight(height).Render(strings.Join(rows, "\n"))
+}
+
+// nextTaskState is the s-key cycle; completed/cancelled reopen.
+func nextTaskState(state string) string {
+	switch state {
+	case "open":
+		return "in_progress"
+	case "in_progress":
+		return "waiting"
+	case "waiting":
+		return "completed"
+	default:
+		return "open"
+	}
 }
 
 func (t *tasksView) taskRow(task api.Task, selected bool, today string, width int) string {
