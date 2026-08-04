@@ -43,6 +43,8 @@ func (m *Model) copyRowReference(row searchRow) (string, error) {
 		return "embed copied", copyToClipboard("[[task:" + row.task.Slug + "]]")
 	case row.document != nil:
 		return "embed copied", copyToClipboard("[[doc:" + row.document.Slug + "]]")
+	case row.upload != nil:
+		return "embed copied", copyToClipboard("[[upload:" + row.upload.Slug + "]]")
 	}
 	return "", nil
 }

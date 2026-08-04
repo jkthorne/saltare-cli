@@ -97,7 +97,7 @@ func TestEnterWithoutEmbedsToasts(t *testing.T) {
 }
 
 func TestUnsupportedEmbedTypeToasts(t *testing.T) {
-	m := embedFeedModel(t, "see [[db:crm]]")
+	m := embedFeedModel(t, "see [[project:launch]]")
 
 	step, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
 	model := step.(Model)
@@ -106,6 +106,32 @@ func TestUnsupportedEmbedTypeToasts(t *testing.T) {
 	}
 	if cmd == nil {
 		t.Fatal("expected the opens-on-the-web toast")
+	}
+}
+
+func TestUploadEmbedOpensFilesView(t *testing.T) {
+	m := embedFeedModel(t, "grab [[upload:q4-report]]")
+
+	step, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model := step.(Model)
+	if model.view != viewFiles {
+		t.Fatal("an upload embed must open the files view")
+	}
+	if model.files.pendingSelect != "q4-report" || cmd == nil {
+		t.Fatalf("the slug must be pending selection, got %q", model.files.pendingSelect)
+	}
+}
+
+func TestDBEmbedOpensGrid(t *testing.T) {
+	m := embedFeedModel(t, "check [[db:crm]]")
+
+	step, cmd := m.Update(tea.KeyMsg{Type: tea.KeyEnter})
+	model := step.(Model)
+	if model.view != viewDB || model.db.level != dbLevelGrid {
+		t.Fatalf("a db embed must open the grid, got view=%v level=%d", model.view, model.db.level)
+	}
+	if cmd == nil {
+		t.Fatal("the grid open must dispatch schema+rows fetches")
 	}
 }
 

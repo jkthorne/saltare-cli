@@ -7,6 +7,7 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 
 	"github.com/jkthorne/saltare/cli/internal/api"
+	"github.com/jkthorne/saltare/cli/internal/tablefmt"
 )
 
 // searchView is the ctrl+f overlay: debounced workspace search over the
@@ -29,6 +30,7 @@ type searchRow struct {
 	message  *api.SearchMessage
 	task     *api.Task
 	document *api.Document
+	upload   *api.Upload
 }
 
 func (r searchRow) selectable() bool { return r.header == "" }
@@ -83,6 +85,12 @@ func (s *searchView) setResults(results *api.SearchResults) {
 			s.rows = append(s.rows, searchRow{document: &results.Documents[i]})
 		}
 	}
+	if len(results.Uploads) > 0 {
+		s.rows = append(s.rows, searchRow{header: "files"})
+		for i := range results.Uploads {
+			s.rows = append(s.rows, searchRow{upload: &results.Uploads[i]})
+		}
+	}
 	s.sel = 0
 	s.advanceToSelectable(1)
 }
@@ -128,6 +136,9 @@ func (s *searchView) rowLine(row searchRow, width int) string {
 	case row.document != nil:
 		d := row.document
 		return truncate("▤ "+d.Title+"  "+styleFeedTopic.Render(d.Slug), width)
+	case row.upload != nil:
+		u := row.upload
+		return truncate("⇱ "+u.Title+"  "+styleFeedTopic.Render(u.Slug+" · "+tablefmt.HumanSize(u.FileSize)), width)
 	default:
 		return ""
 	}

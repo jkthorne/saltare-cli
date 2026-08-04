@@ -457,7 +457,10 @@ func runSearch(args []string) error {
 	for _, d := range results.Documents {
 		fmt.Printf("doc   %-15s %s\n", d.Slug, d.Title)
 	}
-	if len(results.Messages)+len(results.Tasks)+len(results.Documents) == 0 {
+	for _, u := range results.Uploads {
+		fmt.Printf("file  %-15s %s\n", u.Slug, u.Title)
+	}
+	if len(results.Messages)+len(results.Tasks)+len(results.Documents)+len(results.Uploads) == 0 {
 		fmt.Fprintln(os.Stderr, "no results")
 	}
 	return nil

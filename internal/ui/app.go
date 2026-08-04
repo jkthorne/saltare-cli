@@ -22,6 +22,7 @@ import (
 	"github.com/jkthorne/saltare/cli/internal/cable"
 	"github.com/jkthorne/saltare/cli/internal/config"
 	"github.com/jkthorne/saltare/cli/internal/store"
+	"github.com/jkthorne/saltare/cli/internal/tablefmt"
 )
 
 type connState int
@@ -46,6 +47,8 @@ const (
 	viewChat viewMode = iota
 	viewTasks
 	viewDocs
+	viewFiles
+	viewDB
 )
 
 // Bubble Tea messages.
@@ -77,6 +80,21 @@ type taskChangedMsg struct{ task api.Task }
 type notificationsLoadedMsg struct{ items []api.Notification }
 type notificationsClearedMsg struct{}
 type discussionLoadedMsg struct{ channel api.Channel }
+type uploadsLoadedMsg struct{ uploads []api.Upload }
+type uploadDoneMsg struct{ upload api.Upload }
+type uploadRemovedMsg struct{ slug string }
+type downloadDoneMsg struct {
+	target string
+	bytes  int64
+}
+type databasesLoadedMsg struct{ databases []api.Database }
+type dbOpenedMsg struct{ database api.Database }
+type dbRowsLoadedMsg struct {
+	slug string
+	page int
+	rows []api.DBRow
+}
+type rowUpdatedMsg struct{ row api.DBRow }
 type taskDetailLoadedMsg struct{ task api.Task }
 type channelResolvedMsg struct{ channel api.Channel }
 type messageResolvedMsg struct{ message api.Message }
@@ -146,6 +164,8 @@ type Model struct {
 	assist assistant
 	search searchView
 	docs   docsView
+	files  filesView
+	db     dbView
 
 	toast    string
 	toastGen int
@@ -185,6 +205,8 @@ func NewModel(ctx context.Context, cfg *config.Config, client *api.Client) Model
 		tasks:      newTasksView(),
 		search:     newSearchView(),
 		docs:       newDocsView(),
+		files:      newFilesView(),
+		db:         newDBView(),
 		histPages:  map[int64]int{},
 		histDone:   map[int64]bool{},
 		drafts:     config.LoadDrafts(),
@@ -479,6 +501,7 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		if m.docs.viewing != nil {
 			m.docs.showDocument(m.docs.viewing)
 		}
+		m.db.resize(m.width-sidebarWidth-1, m.height-1)
 		m.ready = true
 		m.refreshFeed(false)
 		return m, nil
@@ -619,6 +642,76 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	case editorFinishedMsg:
 		return m.handleEditorFinished(msg)
 
+	case uploadsLoadedMsg:
+		pending := m.files.pendingSelect
+		if !m.files.setList(msg.uploads) {
+			m.softErr = "upload not found: " + pending
+		}
+		return m, nil
+
+	case uploadDoneMsg:
+		m.files.loading = false
+		m.files.list = append([]api.Upload{msg.upload}, m.files.list...)
+		m.files.sel = 0
+		return m, m.showToast("uploaded — [[upload:" + msg.upload.Slug + "]]")
+
+	case uploadRemovedMsg:
+		kept := m.files.list[:0]
+		for _, u := range m.files.list {
+			if u.Slug != msg.slug {
+				kept = append(kept, u)
+			}
+		}
+		m.files.list = kept
+		if m.files.sel >= len(kept) && m.files.sel > 0 {
+			m.files.sel--
+		}
+		return m, m.showToast("deleted " + msg.slug)
+
+	case downloadDoneMsg:
+		return m, m.showToast("wrote " + msg.target + " (" + tablefmt.HumanSize(msg.bytes) + ")")
+
+	case databasesLoadedMsg:
+		m.db.loading = false
+		m.db.list = msg.databases
+		if m.db.sel >= len(msg.databases) {
+			m.db.sel = 0
+		}
+		return m, nil
+
+	case dbOpenedMsg:
+		database := msg.database
+		m.db.database = &database
+		if m.db.rows != nil || database.RowsCount == 0 {
+			m.db.loading = false
+			m.db.buildGrid()
+		}
+		return m, nil
+
+	case dbRowsLoadedMsg:
+		if m.db.database != nil && m.db.database.Slug != msg.slug {
+			return m, nil // stale fetch from a previous table
+		}
+		if msg.page == 1 {
+			m.db.rows = msg.rows
+		} else {
+			m.db.rows = append(m.db.rows, msg.rows...)
+		}
+		m.db.pages = msg.page
+		m.db.more = len(msg.rows) == dbPageSize
+		if m.db.database != nil {
+			m.db.loading = false
+			m.db.buildGrid()
+		}
+		return m, nil
+
+	case rowUpdatedMsg:
+		if m.db.detailIdx >= 0 && m.db.detailIdx < len(m.db.rows) && m.db.rows[m.db.detailIdx].ID == msg.row.ID {
+			m.db.rows[m.db.detailIdx] = msg.row
+		}
+		m.db.buildGrid()
+		return m, m.showToast("saved")
+
 	case messageEditedMsg:
 		m.sending = false
 		m.editing = nil
@@ -698,6 +791,14 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 	} else if m.docs.inputOpen {
 		var cmd tea.Cmd
 		m.docs.input, cmd = m.docs.input.Update(msg)
+		cmds = append(cmds, cmd)
+	} else if m.files.inputOpen {
+		var cmd tea.Cmd
+		m.files.input, cmd = m.files.input.Update(msg)
+		cmds = append(cmds, cmd)
+	} else if m.db.editOpen {
+		var cmd tea.Cmd
+		m.db.input, cmd = m.db.input.Update(msg)
 		cmds = append(cmds, cmd)
 	} else if m.tasks.inputOpen {
 		var cmd tea.Cmd
@@ -924,6 +1025,12 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	}
 	if m.view == viewDocs {
 		return m.handleDocsKey(msg)
+	}
+	if m.view == viewFiles {
+		return m.handleFilesKey(msg)
+	}
+	if m.view == viewDB {
+		return m.handleDBKey(msg)
 	}
 
 	switch key {
@@ -1498,6 +1605,8 @@ func (m Model) openPalette() (tea.Model, tea.Cmd) {
 	items = append(items,
 		paletteItem{label: "⌕ search workspace", action: actionSearch},
 		paletteItem{label: "▤ documents", action: actionDocs},
+		paletteItem{label: "⇱ files", action: actionFiles},
+		paletteItem{label: "▦ databases", action: actionDB},
 		paletteItem{label: "◆ assistant", hint: "local claude session", action: actionAssistant},
 		paletteItem{label: "☑ tasks: mine", action: actionTasksMine},
 		paletteItem{label: "☑ tasks: all open", action: actionTasksAll},
@@ -1540,6 +1649,10 @@ func (m Model) runPaletteItem(item paletteItem) (tea.Model, tea.Cmd) {
 		return m.openSearch("", "")
 	case actionDocs:
 		return m.openDocs()
+	case actionFiles:
+		return m.openFiles("")
+	case actionDB:
+		return m.openDB()
 	case actionAssistant:
 		if !m.assist.active {
 			return m.toggleAssistant()
@@ -1656,11 +1769,11 @@ func (m Model) followEmbed(ref embedRef) (tea.Model, tea.Cmd) {
 	case "agent":
 		return m.followAgentEmbed(ref.ref)
 	case "upload":
-		return m, m.showToast("fetch it: sal files get " + ref.ref)
+		return m.openFiles(ref.ref)
 	case "db":
-		return m, m.showToast("dump it: sal db rows " + ref.ref)
+		return m.openDBGrid(ref.ref)
 	default:
-		return m, m.showToast("⟨" + ref.kind + ":…⟩ opens on the web — sal follows doc/task/channel/msg/agent")
+		return m, m.showToast("⟨" + ref.kind + ":…⟩ opens on the web — sal follows doc/task/channel/msg/agent/upload/db")
 	}
 }
 
@@ -1898,6 +2011,365 @@ func (m Model) saveDocumentBody(slug, body string, base time.Time) tea.Cmd {
 	}
 }
 
+// ── Files view ──────────────────────────────────────────────────────────
+
+func (m Model) openFiles(pendingSelect string) (tea.Model, tea.Cmd) {
+	m.pal.close()
+	m.search.close()
+	m.notify.active = false
+	m.threadPicker.active = false
+	m.view = viewFiles
+	m.comp.blur()
+	m.files.pendingSelect = pendingSelect
+	m.files.loading = true
+	return m, m.fetchUploads()
+}
+
+func (m Model) fetchUploads() tea.Cmd {
+	client, ctx := m.client, m.ctx
+	return func() tea.Msg {
+		uploads, err := client.Uploads(ctx, api.UploadsOpts{})
+		if err != nil {
+			return softErrMsg{err}
+		}
+		return uploadsLoadedMsg{uploads}
+	}
+}
+
+func (m Model) handleFilesKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	f := &m.files
+	key := msg.String()
+
+	if f.confirmRm != nil {
+		target := *f.confirmRm
+		f.confirmRm = nil
+		if key == "y" {
+			client, ctx := m.client, m.ctx
+			return m, func() tea.Msg {
+				if err := client.DeleteUpload(ctx, target.Slug); err != nil {
+					return softErrMsg{err}
+				}
+				return uploadRemovedMsg{target.Slug}
+			}
+		}
+		return m, nil
+	}
+
+	if f.inputOpen {
+		switch key {
+		case "esc":
+			f.inputOpen = false
+			f.input.Blur()
+			return m, nil
+		case "enter":
+			path := expandHome(strings.TrimSpace(f.input.Value()))
+			if path == "" {
+				return m, nil
+			}
+			info, err := os.Stat(path)
+			if err != nil {
+				m.softErr = err.Error()
+				return m, nil
+			}
+			if info.IsDir() {
+				m.softErr = path + " is a directory"
+				return m, nil
+			}
+			f.inputOpen = false
+			f.input.Blur()
+			f.input.SetValue("")
+			f.loading = true
+			client, ctx := m.client, m.ctx
+			return m, func() tea.Msg {
+				upload, err := client.UploadFile(ctx, path, "")
+				if err != nil {
+					return softErrMsg{err}
+				}
+				return uploadDoneMsg{*upload}
+			}
+		}
+		var cmd tea.Cmd
+		f.input, cmd = f.input.Update(msg)
+		return m, cmd
+	}
+
+	switch key {
+	case "esc", "q":
+		m.view = viewChat
+		m.focus = focusComposer
+		return m, m.comp.focus()
+	case "j", "down":
+		f.move(1)
+	case "k", "up":
+		f.move(-1)
+	case "d":
+		if u, ok := f.selected(); ok {
+			return m.downloadUpload(u)
+		}
+	case "u":
+		f.inputOpen = true
+		return m, f.input.Focus()
+	case "x":
+		if u, ok := f.selected(); ok {
+			sel := u
+			f.confirmRm = &sel
+		}
+	case "y":
+		if u, ok := f.selected(); ok {
+			if err := copyToClipboard("[[upload:" + u.Slug + "]]"); err == nil {
+				return m, m.showToast("embed copied")
+			}
+		}
+	case "r":
+		f.loading = true
+		return m, m.fetchUploads()
+	}
+	return m, nil
+}
+
+// downloadUpload saves to the cwd under the original filename; existing
+// targets are refused (the CLI's -o/--force flow handles those).
+func (m Model) downloadUpload(u api.Upload) (tea.Model, tea.Cmd) {
+	target := u.OriginalFilename
+	if target == "" {
+		target = u.Slug
+	}
+	if _, err := os.Stat(target); err == nil {
+		return m, m.showToast(target + " exists — use sal files get -o")
+	}
+	client, ctx := m.client, m.ctx
+	return m, func() tea.Msg {
+		body, _, _, err := client.DownloadUpload(ctx, u.Slug)
+		if err != nil {
+			return softErrMsg{err}
+		}
+		defer body.Close()
+		written, err := config.SafeWriteFile(target, body)
+		if err != nil {
+			return softErrMsg{err}
+		}
+		return downloadDoneMsg{target: target, bytes: written}
+	}
+}
+
+// ── Database view ───────────────────────────────────────────────────────
+
+func (m Model) openDB() (tea.Model, tea.Cmd) {
+	m.pal.close()
+	m.search.close()
+	m.notify.active = false
+	m.threadPicker.active = false
+	m.view = viewDB
+	m.comp.blur()
+	m.db.level = dbLevelList
+	m.db.resize(m.width-sidebarWidth-1, m.height-1)
+	if len(m.db.list) == 0 {
+		m.db.loading = true
+		return m, m.fetchDatabases()
+	}
+	return m, nil
+}
+
+// openDBGrid jumps straight into a table's grid (list enter, follow-embed).
+func (m Model) openDBGrid(slug string) (tea.Model, tea.Cmd) {
+	next, cmd := m.openDB()
+	model := next.(Model)
+	model.db.level = dbLevelGrid
+	model.db.loading = true
+	model.db.database = nil
+	model.db.rows = nil
+	model.db.pages = 0
+	model.db.colOff = 0
+	return model, tea.Batch(cmd, model.fetchDatabase(slug), model.fetchDBRows(slug, 1))
+}
+
+func (m Model) fetchDatabases() tea.Cmd {
+	client, ctx := m.client, m.ctx
+	return func() tea.Msg {
+		databases, err := client.Databases(ctx)
+		if err != nil {
+			return softErrMsg{err}
+		}
+		return databasesLoadedMsg{databases}
+	}
+}
+
+func (m Model) fetchDatabase(slug string) tea.Cmd {
+	client, ctx := m.client, m.ctx
+	return func() tea.Msg {
+		database, err := client.Database(ctx, slug)
+		if err != nil {
+			return softErrMsg{err}
+		}
+		return dbOpenedMsg{*database}
+	}
+}
+
+func (m Model) fetchDBRows(slug string, page int) tea.Cmd {
+	client, ctx := m.client, m.ctx
+	return func() tea.Msg {
+		rows, err := client.DatabaseRows(ctx, slug, page, dbPageSize)
+		if err != nil {
+			return softErrMsg{err}
+		}
+		return dbRowsLoadedMsg{slug: slug, page: page, rows: rows}
+	}
+}
+
+func (m Model) handleDBKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	d := &m.db
+	key := msg.String()
+
+	if d.level == dbLevelDetail {
+		return m.handleDBDetailKey(msg)
+	}
+
+	if d.level == dbLevelGrid {
+		switch key {
+		case "esc", "q":
+			d.level = dbLevelList
+			if len(d.list) == 0 {
+				d.loading = true
+				return m, m.fetchDatabases()
+			}
+			return m, nil
+		case "h", "left":
+			d.colOff--
+			d.buildGrid()
+			return m, nil
+		case "l", "right":
+			d.colOff++
+			d.buildGrid()
+			return m, nil
+		case "o":
+			if d.more && d.database != nil {
+				return m, m.fetchDBRows(d.database.Slug, d.pages+1)
+			}
+			return m, nil
+		case "enter":
+			if d.built && len(d.rows) > 0 {
+				d.detailIdx = d.grid.Cursor()
+				d.fieldSel = 0
+				d.level = dbLevelDetail
+			}
+			return m, nil
+		case "y":
+			if d.database != nil {
+				if err := copyToClipboard("[[db:" + d.database.Slug + "]]"); err == nil {
+					return m, m.showToast("embed copied")
+				}
+			}
+			return m, nil
+		case "r":
+			if d.database != nil {
+				return m.openDBGrid(d.database.Slug)
+			}
+			return m, nil
+		}
+		if d.built {
+			var cmd tea.Cmd
+			d.grid, cmd = d.grid.Update(msg)
+			return m, cmd
+		}
+		return m, nil
+	}
+
+	// Database list.
+	switch key {
+	case "esc", "q":
+		m.view = viewChat
+		m.focus = focusComposer
+		return m, m.comp.focus()
+	case "j", "down":
+		d.move(1)
+	case "k", "up":
+		d.move(-1)
+	case "enter":
+		if db, ok := d.selected(); ok {
+			return m.openDBGrid(db.Slug)
+		}
+	case "r":
+		d.loading = true
+		return m, m.fetchDatabases()
+	}
+	return m, nil
+}
+
+func (m Model) handleDBDetailKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
+	d := &m.db
+	key := msg.String()
+	columns := d.columns()
+
+	if d.editOpen {
+		switch key {
+		case "esc":
+			d.editOpen = false
+			d.input.Blur()
+			return m, nil
+		case "enter":
+			row := d.currentRow()
+			if row == nil {
+				d.editOpen = false
+				return m, nil
+			}
+			// Whole-hash replace: copy, set the edited key as a raw string
+			// (the server coerces per column type), PATCH.
+			data := make(map[string]any, len(row.Data))
+			for k, v := range row.Data {
+				data[k] = v
+			}
+			value := strings.TrimSpace(d.input.Value())
+			if value == "" {
+				data[d.editKey] = nil
+			} else {
+				data[d.editKey] = value
+			}
+			d.editOpen = false
+			d.input.Blur()
+			client, ctx := m.client, m.ctx
+			dbSlug, rowID := d.database.Slug, row.ID
+			return m, func() tea.Msg {
+				updated, err := client.UpdateRowData(ctx, dbSlug, rowID, data)
+				if err != nil {
+					return softErrMsg{err}
+				}
+				return rowUpdatedMsg{*updated}
+			}
+		}
+		var cmd tea.Cmd
+		d.input, cmd = d.input.Update(msg)
+		return m, cmd
+	}
+
+	switch key {
+	case "esc", "q":
+		d.level = dbLevelGrid
+	case "j", "down":
+		if d.fieldSel < len(columns)-1 {
+			d.fieldSel++
+		}
+	case "k", "up":
+		if d.fieldSel > 0 {
+			d.fieldSel--
+		}
+	case "enter":
+		row := d.currentRow()
+		if row == nil || d.fieldSel >= len(columns) {
+			return m, nil
+		}
+		col := columns[d.fieldSel]
+		if col.Type == "formula" {
+			return m, m.showToast("computed column — edited by its formula")
+		}
+		d.editOpen = true
+		d.editKey = col.Key
+		d.input.SetValue(tablefmt.RenderCell(row.Data[col.Key]))
+		d.input.CursorEnd()
+		return m, d.input.Focus()
+	}
+	return m, nil
+}
+
 // ── Search ──────────────────────────────────────────────────────────────
 
 const searchDebounce = 300 * time.Millisecond
@@ -1999,6 +2471,10 @@ func (m Model) openSearchResult(row searchRow) (tea.Model, tea.Cmd) {
 		return m, m.fetchTasks()
 	case row.document != nil:
 		return m, m.copyReference(row)
+	case row.upload != nil:
+		slug := row.upload.Slug
+		m.search.close()
+		return m.openFiles(slug)
 	}
 	return m, nil
 }
@@ -2397,6 +2873,10 @@ func (m Model) View() string {
 		pane = m.tasks.render(m.renderer, feedWidth, m.height-1)
 	case m.view == viewDocs:
 		pane = m.docs.render(feedWidth, m.height-1)
+	case m.view == viewFiles:
+		pane = m.files.render(feedWidth, m.height-1)
+	case m.view == viewDB:
+		pane = m.db.render(feedWidth, m.height-1)
 	case m.threadPicker.active:
 		pane = m.renderThreadPicker(feedWidth)
 	case m.embedPicker.active:
@@ -2480,6 +2960,9 @@ func (m Model) statusBar() string {
 	}
 	if m.confirmDelete != nil {
 		left += styleStatusRetry.Render(" delete message? y/n ")
+	}
+	if m.files.confirmRm != nil {
+		left += styleStatusRetry.Render(" delete upload? y/n ")
 	}
 	if m.toast != "" {
 		left += styleStatusOK.Render(" · " + truncate(m.toast, 40))

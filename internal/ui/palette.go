@@ -30,6 +30,8 @@ const (
 	actionAssistant     = "assistant"
 	actionSearch        = "search"
 	actionDocs          = "docs"
+	actionFiles         = "files"
+	actionDB            = "databases"
 )
 
 type palette struct {
