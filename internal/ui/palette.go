@@ -34,6 +34,7 @@ const (
 	actionDocs          = "docs"
 	actionFiles         = "files"
 	actionDB            = "databases"
+	actionAttach        = "attach"
 )
 
 type palette struct {

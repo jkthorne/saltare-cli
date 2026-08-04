@@ -83,6 +83,13 @@ type tasksLoadedMsg struct {
 type projectsLoadedMsg struct{ projects []api.Project }
 type taskChangedMsg struct{ task api.Task }
 type notifCountMsg struct{ count int }
+type attachDebounceMsg struct{ gen int }
+type attachResultsMsg struct {
+	gen     int
+	uploads []api.Upload
+	err     error
+}
+type attachDoneMsg struct{ upload api.Upload }
 type notificationsLoadedMsg struct{ items []api.Notification }
 type notificationsClearedMsg struct{}
 type discussionLoadedMsg struct{ channel api.Channel }
@@ -167,6 +174,7 @@ type Model struct {
 	pal    palette
 	tasks  tasksView
 	home   homeView
+	attach attachView
 	notify notifyView
 	assist assistant
 	search searchView
@@ -214,6 +222,7 @@ func NewModel(ctx context.Context, cfg *config.Config, client *api.Client) Model
 		docs:       newDocsView(),
 		files:      newFilesView(),
 		db:         newDBView(),
+		attach:     newAttachView(),
 		histPages:  map[int64]int{},
 		histDone:   map[int64]bool{},
 		drafts:     config.LoadDrafts(),
@@ -790,6 +799,31 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		}
 		return m, nil
 
+	case attachDebounceMsg:
+		if m.attach.active && msg.gen == m.attach.gen {
+			return m, m.runAttachSearch()
+		}
+		return m, nil
+
+	case attachResultsMsg:
+		if !m.attach.active || msg.gen != m.attach.gen {
+			return m, nil // a newer query (or a path) superseded this response
+		}
+		m.attach.loading = false
+		if msg.err != nil {
+			m.softErr = "uploads: " + msg.err.Error()
+			return m, nil
+		}
+		m.attach.results = msg.uploads
+		m.attach.sel = 0
+		return m, nil
+
+	case attachDoneMsg:
+		m.attach.close()
+		m.comp.insertAtCursor("[[upload:" + msg.upload.Slug + "]]")
+		m.focus = focusComposer
+		return m, tea.Batch(m.comp.focus(), m.showToast("attached [[upload:"+msg.upload.Slug+"]]"))
+
 	case searchResultsMsg:
 		if !m.search.active || msg.gen != m.search.gen {
 			return m, nil // a newer query superseded this response
@@ -842,6 +876,8 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		cmds = append(cmds, m.pal.update(msg))
 	} else if m.search.active {
 		cmds = append(cmds, m.updateSearchInput(msg))
+	} else if m.attach.active {
+		cmds = append(cmds, m.updateAttachInput(msg))
 	} else if m.docs.inputOpen {
 		var cmd tea.Cmd
 		m.docs.input, cmd = m.docs.input.Update(msg)
@@ -1077,6 +1113,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.notify.active {
 		return m.handleNotifyKey(key)
 	}
+	if m.attach.active {
+		return m.handleAttachKey(msg)
+	}
 	if m.view == viewTasks {
 		return m.handleTasksKey(msg)
 	}
@@ -1100,6 +1139,8 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, cmd
 	case "ctrl+t":
 		return m.openThreadPicker()
+	case "ctrl+y":
+		return m.openAttach()
 	}
 
 	if m.threadPicker.active {
@@ -1676,6 +1717,7 @@ func (m Model) openPalette() (tea.Model, tea.Cmd) {
 		paletteItem{label: "⌕ search workspace", action: actionSearch},
 		paletteItem{label: "▤ documents", action: actionDocs},
 		paletteItem{label: "⇱ files", action: actionFiles},
+		paletteItem{label: "⇱ attach file…", hint: "insert [[upload:slug]]", action: actionAttach},
 		paletteItem{label: "▦ databases", action: actionDB},
 		paletteItem{label: "◆ assistant", hint: "local claude session", action: actionAssistant},
 		paletteItem{label: "☑ tasks: mine", action: actionTasksMine},
@@ -1743,6 +1785,9 @@ func (m Model) runPaletteItem(item paletteItem) (tea.Model, tea.Cmd) {
 		return m.openDocs()
 	case actionFiles:
 		return m.openFiles("")
+	case actionAttach:
+		m.view = viewChat
+		return m.openAttach()
 	case actionDB:
 		return m.openDB()
 	case actionAssistant:
@@ -2965,6 +3010,8 @@ func (m Model) View() string {
 		pane = m.search.render(feedWidth, m.height-1)
 	case m.notify.active:
 		pane = m.notify.render(feedWidth, m.height-1)
+	case m.attach.active:
+		pane = m.renderAttach(feedWidth, m.height-1)
 	case m.view == viewTasks:
 		pane = m.tasks.render(m.renderer, feedWidth, m.height-1)
 	case m.view == viewDocs:

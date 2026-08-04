@@ -71,6 +71,20 @@ func (c *composer) setValue(s string) {
 	c.closeMention()
 }
 
+// insertAtCursor splices s in at the cursor (attach embeds). setValue is
+// end-anchored — InsertString is the only way to keep the cursor position.
+func (c *composer) insertAtCursor(s string) {
+	c.ta.InsertString(s)
+	lines := c.ta.LineCount()
+	if lines < 1 {
+		lines = 1
+	}
+	if lines > composerMaxHeight {
+		lines = composerMaxHeight
+	}
+	c.ta.SetHeight(lines)
+}
+
 func (c *composer) update(msg tea.Msg) tea.Cmd {
 	var cmd tea.Cmd
 	c.ta, cmd = c.ta.Update(msg)
