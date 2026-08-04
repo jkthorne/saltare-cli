@@ -65,6 +65,12 @@ go build -o sal ./cmd/sal
 | `sal tasks show SLUG` | Print a task's detail |
 | `sal tasks complete SLUG` | Mark a task completed |
 | `sal tasks add TITLE` | Create a self-assigned task (`--project SLUG`, `--due YYYY-MM-DD`, `--priority P`) |
+| `sal files` | List uploads (`--json`, `--category C`, `-q QUERY`) |
+| `sal files put PATH` | Upload a file (`--title T`) — prints the `[[upload:slug]]` embed |
+| `sal files get SLUG` | Download a file (`-o PATH`, `--force`) |
+| `sal files rm SLUG` | Delete an upload |
+| `sal db` | List databases (`--json`) |
+| `sal db rows SLUG` | Dump a table — TSV by default, `--csv`, `--json`, `--limit N` |
 | `sal ask QUESTION` | Claude answer streamed to stdout, grounded via workspace tools (`--model`, `--no-tools`; reads stdin when QUESTION omitted) |
 | `sal version` | Print the version |
 
@@ -108,6 +114,15 @@ after documents:write joined the CLI grant — if sal says re-run
 description); from there `enter`/`o` drops into the task's **discussion
 channel** (joining you so unread tracking works), `x` completes, `s`
 cycles the state, `y` copies the `[[task:slug]]` embed.
+
+**Files & data** (CLI-only): `sal files put deploy.log` from any server
+pushes into the workspace; `sal files get` pulls an attachment without a
+browser (downloads follow the presigned storage redirect — your token
+never leaves the app host — and never leave truncated files behind).
+`sal db rows crm --csv` dumps a table for spreadsheets;
+`sal db rows crm --json | jq '.[].data'` gives scripts typed cells. Both
+`put` and `docs edit` need a session minted after their scopes joined the
+CLI grant — if sal says re-run `sal login`, one login fixes everything.
 
 Unsent composer text is a **draft**: it survives channel switches, quits,
 and crashes (`~/.config/saltare/drafts.json`) and clears when you send.
