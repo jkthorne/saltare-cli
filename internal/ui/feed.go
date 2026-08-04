@@ -18,6 +18,30 @@ var embedPattern = regexp.MustCompile(`!?\[\[(\w+):([^\]\n]+)\]\]`)
 
 // renderEmbedChips swaps embed syntax for compact styled chips after markdown
 // rendering. A chip split across wrapped lines stays raw — acceptable.
+// embedRef is one [[type:slug]] reference; msg refs carry an integer id.
+type embedRef struct {
+	kind string
+	ref  string
+}
+
+// extractEmbeds pulls a message's references in order, deduped. The server
+// strips identifier whitespace (EmbedPreprocessor) — match that.
+func extractEmbeds(body string) []embedRef {
+	matches := embedPattern.FindAllStringSubmatch(body, -1)
+	var refs []embedRef
+	seen := map[string]bool{}
+	for _, groups := range matches {
+		ref := embedRef{kind: groups[1], ref: strings.TrimSpace(groups[2])}
+		key := ref.kind + ":" + ref.ref
+		if ref.ref == "" || seen[key] {
+			continue
+		}
+		seen[key] = true
+		refs = append(refs, ref)
+	}
+	return refs
+}
+
 func renderEmbedChips(s string) string {
 	return embedPattern.ReplaceAllStringFunc(s, func(match string) string {
 		groups := embedPattern.FindStringSubmatch(match)

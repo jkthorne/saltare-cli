@@ -8,6 +8,7 @@ import (
 	"errors"
 	"fmt"
 	"os"
+	"strconv"
 	"strings"
 	"time"
 
@@ -76,6 +77,9 @@ type taskChangedMsg struct{ task api.Task }
 type notificationsLoadedMsg struct{ items []api.Notification }
 type notificationsClearedMsg struct{}
 type discussionLoadedMsg struct{ channel api.Channel }
+type taskDetailLoadedMsg struct{ task api.Task }
+type channelResolvedMsg struct{ channel api.Channel }
+type messageResolvedMsg struct{ message api.Message }
 type docsLoadedMsg struct{ docs []api.Document }
 type docLoadedMsg struct {
 	doc  api.Document
@@ -130,6 +134,11 @@ type Model struct {
 		active  bool
 		threads []api.Channel
 		sel     int
+	}
+	embedPicker struct {
+		active bool
+		refs   []embedRef
+		sel    int
 	}
 	pal    palette
 	tasks  tasksView
@@ -534,6 +543,35 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 		m.tasks.detail = nil
 		return m.openThread(msg.channel)
 
+	case taskDetailLoadedMsg:
+		m.view = viewTasks
+		m.tasks.active = true
+		task := msg.task
+		m.tasks.detail = &task
+		if len(m.tasks.tasks) == 0 {
+			m.tasks.loading = true
+			return m, m.fetchTasks()
+		}
+		return m, nil
+
+	case channelResolvedMsg:
+		m.view = viewChat
+		return m.openThread(msg.channel)
+
+	case messageResolvedMsg:
+		m.view = viewChat
+		hit := msg.message
+		if _, ok := m.store.Channel(hit.ChannelID); ok || m.sidebarHas(hit.ChannelID) {
+			next, cmd := m.openChannelByID(hit.ChannelID)
+			if model, isModel := next.(Model); isModel {
+				model.feedSel = hit.ID
+				return model, cmd
+			}
+			return next, cmd
+		}
+		m.softErr = "channel not loaded — refresh (ctrl+r) and retry"
+		return m, nil
+
 	case notificationsLoadedMsg:
 		m.notify.active = true
 		m.notify.items = msg.items
@@ -900,6 +938,9 @@ func (m Model) handleKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	if m.threadPicker.active {
 		return m.handlePickerKey(key)
 	}
+	if m.embedPicker.active {
+		return m.handleEmbedPickerKey(key)
+	}
 
 	switch key {
 	case "tab":
@@ -998,6 +1039,8 @@ func (m Model) handleFeedKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m.armDelete()
 	case "y":
 		return m.copySelectionPermalink()
+	case "enter":
+		return m.followSelectionEmbeds()
 	case "/":
 		if c, ok := m.store.Channel(m.focusedID); ok {
 			return m.openSearch(c.Slug, c.Title())
@@ -1505,6 +1548,135 @@ func (m Model) runPaletteItem(item paletteItem) (tea.Model, tea.Cmd) {
 		return m, m.comp.focus()
 	}
 	return m, m.focusCmd()
+}
+
+// ── Follow embeds ───────────────────────────────────────────────────────
+
+// followSelectionEmbeds routes enter on a selected message: one [[embed]]
+// follows immediately, several open a picker.
+func (m Model) followSelectionEmbeds() (tea.Model, tea.Cmd) {
+	target := m.findMessage(m.feedSel)
+	if target == nil {
+		return m, nil
+	}
+	refs := extractEmbeds(target.Body)
+	switch len(refs) {
+	case 0:
+		return m, m.showToast("no references in this message")
+	case 1:
+		return m.followEmbed(refs[0])
+	default:
+		m.embedPicker.active = true
+		m.embedPicker.refs = refs
+		m.embedPicker.sel = 0
+		return m, nil
+	}
+}
+
+func (m Model) handleEmbedPickerKey(key string) (tea.Model, tea.Cmd) {
+	p := &m.embedPicker
+	switch key {
+	case "esc", "q":
+		p.active = false
+	case "j", "down":
+		if p.sel < len(p.refs)-1 {
+			p.sel++
+		}
+	case "k", "up":
+		if p.sel > 0 {
+			p.sel--
+		}
+	case "enter":
+		ref := p.refs[p.sel]
+		p.active = false
+		return m.followEmbed(ref)
+	}
+	return m, nil
+}
+
+func (m Model) renderEmbedPicker(width int) string {
+	var rows []string
+	rows = append(rows, stylePickerTitle.Render("⟨references⟩"), "")
+	for i, ref := range m.embedPicker.refs {
+		row := "⟨" + ref.kind + ":" + ref.ref + "⟩"
+		if i == m.embedPicker.sel {
+			rows = append(rows, stylePickerSel.Render("▸ "+truncate(row, width-4)))
+		} else {
+			rows = append(rows, stylePickerRow.Render("  "+truncate(row, width-4)))
+		}
+	}
+	rows = append(rows, "", styleFeedTopic.Render("enter follow · esc close"))
+	return lipgloss.NewStyle().Width(width).Height(m.height-1).Padding(1, 2).Render(strings.Join(rows, "\n"))
+}
+
+// followEmbed opens whatever a reference points at; types sal can't render
+// yet fall back to a hint (the server's SLUG_TYPES/ID_TYPES routing).
+func (m Model) followEmbed(ref embedRef) (tea.Model, tea.Cmd) {
+	switch ref.kind {
+	case "doc":
+		return m.openDocBySlug(ref.ref)
+	case "task":
+		client, ctx := m.client, m.ctx
+		slug := ref.ref
+		return m, func() tea.Msg {
+			task, err := client.Task(ctx, slug)
+			if err != nil {
+				return softErrMsg{err}
+			}
+			return taskDetailLoadedMsg{*task}
+		}
+	case "channel":
+		for _, c := range m.store.Channels() {
+			if c.Slug == ref.ref {
+				return m.openChannelByID(c.ID)
+			}
+		}
+		client, ctx := m.client, m.ctx
+		slug := ref.ref
+		return m, func() tea.Msg {
+			channel, err := client.Channel(ctx, slug)
+			if err != nil {
+				return softErrMsg{err}
+			}
+			return channelResolvedMsg{*channel}
+		}
+	case "msg":
+		id, err := strconv.ParseInt(ref.ref, 10, 64)
+		if err != nil {
+			return m, nil
+		}
+		client, ctx := m.client, m.ctx
+		return m, func() tea.Msg {
+			message, err := client.MessageByID(ctx, id)
+			if err != nil {
+				return softErrMsg{err}
+			}
+			return messageResolvedMsg{*message}
+		}
+	case "agent":
+		return m.followAgentEmbed(ref.ref)
+	default:
+		return m, m.showToast("⟨" + ref.kind + ":…⟩ opens on the web — sal follows doc/task/channel/msg/agent")
+	}
+}
+
+func (m Model) followAgentEmbed(slug string) (tea.Model, tea.Cmd) {
+	for i := range m.agents {
+		if m.agents[i].Slug != slug {
+			continue
+		}
+		agent := m.agents[i]
+		// An existing agent DM lives in the sidebar as an agent_dm channel.
+		for _, it := range m.items {
+			if it.channel != nil && it.channel.Kind == "agent_dm" &&
+				it.channel.HostID != nil && *it.channel.HostID == agent.ID {
+				return m.openChannelByID(it.channel.ID)
+			}
+		}
+		return m.runPaletteItem(paletteItem{action: "agent", agent: &agent})
+	}
+	m.softErr = "agent not found: " + slug
+	return m, nil
 }
 
 // ── Documents ───────────────────────────────────────────────────────────
@@ -2223,6 +2395,8 @@ func (m Model) View() string {
 		pane = m.docs.render(feedWidth, m.height-1)
 	case m.threadPicker.active:
 		pane = m.renderThreadPicker(feedWidth)
+	case m.embedPicker.active:
+		pane = m.renderEmbedPicker(feedWidth)
 	default:
 		pane = m.renderFeedPane(feedWidth)
 	}
