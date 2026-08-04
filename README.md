@@ -1,9 +1,10 @@
 # sal — Saltare in your terminal
 
 A Go TUI + CLI client for Saltare: live chat with markdown and @-mentions,
-threads (browse, reply, or start one from any message), agent DMs, a tasks
-pane, a command palette, a notifications inbox — and a built-in **Claude
-assistant** riding the workspace's metered inference proxy.
+threads (browse, reply, or start one from any message), agent DMs, message
+editing, workspace search, a tasks pane, a command palette, a notifications
+inbox — and a built-in **Claude assistant** that rides the workspace's
+metered inference proxy and uses tools to read and act on your workspace.
 
 ```
 ┌ sidebar ──┬ feed ────────────────────────────────┐
@@ -53,10 +54,11 @@ go build -o sal ./cmd/sal
 | `sal channels` | List channels (`--json` for scripts, `--kind` to filter) |
 | `sal send CHANNEL [MSG]` | Post a message (reads stdin when MSG omitted) |
 | `sal tail CHANNEL` | Stream a channel's messages to stdout (`-n` recent history first) |
+| `sal search QUERY` | Search messages, tasks, and documents (`--type`, `--channel SLUG`, `--json`) |
 | `sal tasks` | List your open tasks (`--all`, `--state S`, `--json`) |
 | `sal tasks complete SLUG` | Mark a task completed |
 | `sal tasks add TITLE` | Create a self-assigned task (`--project SLUG`) |
-| `sal ask QUESTION` | One-shot Claude answer streamed to stdout (`--model`; reads stdin when QUESTION omitted) |
+| `sal ask QUESTION` | Claude answer streamed to stdout, grounded via workspace tools (`--model`, `--no-tools`; reads stdin when QUESTION omitted) |
 | `sal version` | Print the version |
 
 ## TUI keys
@@ -69,8 +71,22 @@ complete — names insert exactly as MentionExtractionJob matches them).
 Feed focus is **selection mode**: `j/k` moves a message cursor (arc gutter
 bar); `t` opens the selected message's thread, or arms *reply-in-new-thread*
 if it has none — your reply creates the thread and the view follows it.
-`ctrl+t` opens the thread picker; inside a thread `esc` returns to the parent.
-`pgup/pgdn` scroll from any focus. `ctrl+r` refresh · `ctrl+c` quit.
+`e` edits your own selected message in the composer (enter saves, esc
+cancels and brings back whatever you were typing); `d` asks `y/n` in the
+status bar and deletes; `y` copies the message's web permalink (OSC 52, so
+it works over SSH and in tmux). `ctrl+t` opens the thread picker; inside a
+thread `esc` returns to the parent. `pgup/pgdn` scroll from any focus.
+`ctrl+r` refresh · `ctrl+c` quit.
+
+**Search**: `ctrl+f` searches the whole workspace; `/` in feed selection
+mode pre-scopes to the current channel. Results group into messages, tasks,
+and documents — `enter` jumps to a message or the tasks pane, `y` copies a
+permalink or `[[embed]]` reference. Queries debounce as you type.
+
+Unsent composer text is a **draft**: it survives channel switches, quits,
+and crashes (`~/.config/saltare/drafts.json`) and clears when you send.
+Opening a channel with unreads draws a `── NEW ──` rule where you left off,
+and DMs are labeled with the *other* person's name.
 
 `ctrl+k` opens the **command palette**: fuzzy-jump to any channel or agent, or
 run actions (assistant, tasks views, new task, notifications). `ctrl+n` opens
@@ -78,10 +94,13 @@ the **notifications inbox** — `enter` jumps to the channel, `R` marks all read
 
 `ctrl+g` toggles the **assistant** — a local Claude session over the
 workspace's inference proxy (the server holds the provider key and meters
-credits; the conversation itself never leaves your terminal). Streaming, with
-markdown rendering and token usage per answer. No tool access yet. In the
-feed, `o` loads older history without losing your scroll position, and
-`[[type:slug]]` embeds render as `⟨type:slug⟩` chips.
+credits; the conversation itself never leaves your terminal). It has
+**tools**: search, channels, messages, tasks, and documents, all executed
+client-side against the REST API with *your* token — so everything it reads
+respects your permissions and any task it creates is assigned to you.
+Tool calls trace as dim `◇` lines; token usage sums every hop of the loop.
+In the feed, `o` loads older history without losing your scroll position,
+and `[[type:slug]]` embeds render as `⟨type:slug⟩` chips.
 
 The **tasks pane** (via palette): `j/k` move, `x`/`enter` complete or reopen,
 `n` new task (title, then a project pick when several exist — tasks created
@@ -101,7 +120,9 @@ thread auto-joins you to it.
 - **Secrets**: tokens live in the OS keychain (`saltare-sal` service) with a
   `~/.config/saltare/credentials.json` (0600) fallback; non-secret settings in
   `~/.config/saltare/config.json`.
-- **REST**: channels (+ per-caller unread state), messages, mark-read.
+- **REST**: channels (+ per-caller unread state and viewer-relative DM
+  names), messages (post, edit, delete), search, tasks, documents,
+  mark-read.
 - **Live**: `/cable?access_token=…` with a same-origin `Origin` header
   (Action Cable forgery protection requires one). Subscribes `MessagesChannel`
   per member channel; consumes `message_created` / `message_updated` /
@@ -112,11 +133,13 @@ thread auto-joins you to it.
 
 ```
 cmd/sal/          entrypoint + subcommands
-internal/api/     typed /api/v1 client (auth, refresh single-flight, resources)
+internal/api/     typed /api/v1 client (auth, refresh single-flight, resources,
+                  Anthropic-format inference streaming with tool blocks)
+internal/assist/  the assistant's tool loop: catalog, REST executor, RunLoop
 internal/cable/   minimal Action Cable client (subscribe, watchdog, backoff)
 internal/store/   in-memory timeline + unread state (single-goroutine, tested)
 internal/ui/      Bubble Tea model, NieR HUD lipgloss theme, glamour markdown
-internal/config/  config file + keychain token storage
+internal/config/  config file + drafts + keychain token storage
 ```
 
 ## Development
