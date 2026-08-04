@@ -128,6 +128,15 @@ go test ./...    # unit tests (api refresh flow, cable framing, store)
 gofmt -l .       # formatting (CI enforces)
 ```
 
+**tmux + vim-tmux-navigator users**: that config binds `C-h/j/k/l` globally
+and only forwards them to whitelisted programs — so sal's `ctrl+k` (palette)
+and `ctrl+j` (newline) silently become pane navigation. Add `sal` to the
+`is_vim` process regex the same way `fzf` is usually whitelisted:
+
+```
+| grep -iqE '^[^TXZ ]+ +(\\S+\\/)?g?(view|l?n?vim?x?|fzf|sal)(diff)?$'
+```
+
 The TUI is dark-terminal-only for now, matching the NieR HUD design system.
 Tested against the dev server: `bin/rails server`, then
 `sal login --server http://localhost:3000`.
