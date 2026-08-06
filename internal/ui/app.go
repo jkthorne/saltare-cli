@@ -207,6 +207,11 @@ type Model struct {
 	renderer *feedRenderer
 }
 
+// Fatal reports the error that ended the session, or nil on a normal quit.
+// View renders it too, but that draw lands inside the alt screen and teardown
+// wipes it — so the caller must surface this after Run returns.
+func (m Model) Fatal() error { return m.fatal }
+
 func NewModel(ctx context.Context, cfg *config.Config, client *api.Client) Model {
 	m := Model{
 		cfg:        cfg,

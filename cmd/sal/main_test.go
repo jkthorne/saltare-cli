@@ -2,10 +2,12 @@ package main
 
 import (
 	"bufio"
+	"errors"
 	"strings"
 	"testing"
 
 	"github.com/jkthorne/saltare/cli/internal/api"
+	"github.com/jkthorne/saltare/cli/internal/config"
 )
 
 var pickChoices = []api.WorkspaceChoice{
@@ -68,5 +70,36 @@ func TestPickWorkspaceEOF(t *testing.T) {
 	_, _, err := pick(t, "garbage", "") // no newline, then EOF
 	if err == nil {
 		t.Fatal("EOF must surface an error, not loop")
+	}
+}
+
+var authCfg = &config.Config{ServerURL: "http://localhost:2999", Email: "ghost@example.com"}
+
+func TestAuthErrorNamesIdentityAndServer(t *testing.T) {
+	err := authError(authCfg, api.ErrAuthExpired)
+	if err == nil {
+		t.Fatal("want an error")
+	}
+	for _, want := range []string{"ghost@example.com", "http://localhost:2999", "sal login"} {
+		if !strings.Contains(err.Error(), want) {
+			t.Fatalf("missing %q in:\n%s", want, err)
+		}
+	}
+}
+
+func TestAuthErrorPassesThroughNilAndOthers(t *testing.T) {
+	if err := authError(authCfg, nil); err != nil {
+		t.Fatalf("nil must stay nil, got %v", err)
+	}
+	other := errors.New("network unreachable")
+	if err := authError(authCfg, other); !errors.Is(err, other) {
+		t.Fatalf("non-auth errors must pass through unchanged, got %v", err)
+	}
+}
+
+func TestAuthErrorFallsBackWhenEmailMissing(t *testing.T) {
+	err := authError(&config.Config{ServerURL: "http://x"}, api.ErrAuthExpired)
+	if !strings.Contains(err.Error(), "this device") {
+		t.Fatalf("want a fallback subject, got:\n%s", err)
 	}
 }

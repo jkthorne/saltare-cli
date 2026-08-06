@@ -158,9 +158,40 @@ func runTUI() error {
 	ctx, cancel := interruptContext()
 	defer cancel()
 
+	// Preflight the session before the alt screen opens. A dead session would
+	// otherwise render its error into a screen that teardown immediately wipes,
+	// leaving the terminal looking like sal exited for no reason.
+	if _, err := client.Me(ctx); err != nil {
+		return authError(cfg, err)
+	}
+
 	program := tea.NewProgram(ui.NewModel(ctx, cfg, client), tea.WithAltScreen())
-	_, err = program.Run()
-	return err
+	final, err := program.Run()
+	if err != nil {
+		return err
+	}
+	// The model quits on a fatal error rather than returning one, so pull it
+	// off the final model — otherwise the failure exits 0 and prints nothing.
+	if m, ok := final.(ui.Model); ok {
+		return authError(cfg, m.Fatal())
+	}
+	return nil
+}
+
+// authError names the identity sal is failing as. A bare "run `sal login`" is
+// misleading when the saved account is gone from the server entirely — logging
+// in again with the same stored email just fails a second time.
+func authError(cfg *config.Config, err error) error {
+	if err == nil || !errors.Is(err, api.ErrAuthExpired) {
+		return err
+	}
+	who := cfg.Email
+	if who == "" {
+		who = "this device"
+	}
+	return fmt.Errorf("session expired for %s on %s\n"+
+		"     run `sal login` — the saved account may no longer exist on this server",
+		who, cfg.ServerURL)
 }
 
 func runLogin(args []string) error {
