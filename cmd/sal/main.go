@@ -40,7 +40,7 @@ var version = "0.2.0-dev"
 func main() {
 	args := os.Args[1:]
 	cmd := ""
-	if len(args) > 0 && !strings.HasPrefix(args[0], "-") {
+	if len(args) > 0 {
 		cmd = args[0]
 		args = args[1:]
 	}
