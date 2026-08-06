@@ -27,14 +27,35 @@ func New() *Store {
 	}
 }
 
+// contextualKinds never appear in the default channel listing — they enter the
+// store only by being opened (a thread, a task discussion).
+var contextualKinds = map[string]bool{"thread": true, "discussion": true}
+
 // SetChannels replaces the channel list, seeding unread counts from the
-// server's per-membership numbers.
+// server's per-membership numbers. Contextual channels already held are kept:
+// a refresh mid-session must not forget the thread the user is reading or the
+// ones behind it.
 func (s *Store) SetChannels(channels []api.Channel) {
-	s.channels = channels
+	incoming := make(map[int64]bool, len(channels))
+	for _, c := range channels {
+		incoming[c.ID] = true
+	}
+
+	kept := make([]api.Channel, 0, len(channels))
+	kept = append(kept, channels...)
+	for _, c := range s.channels {
+		if contextualKinds[c.Kind] && !incoming[c.ID] {
+			kept = append(kept, c)
+		}
+	}
+
+	s.channels = kept
 	s.byID = map[int64]int{}
-	for i, c := range channels {
+	for i, c := range kept {
 		s.byID[c.ID] = i
-		s.unread[c.ID] = c.Unread()
+		if incoming[c.ID] {
+			s.unread[c.ID] = c.Unread()
+		}
 	}
 }
 

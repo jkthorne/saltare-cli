@@ -27,6 +27,9 @@ var (
 	styleChannelSel    = lipgloss.NewStyle().Foreground(cArcBright).Bold(true)
 	styleChannelUnread = lipgloss.NewStyle().Foreground(cFrost).Bold(true)
 	styleUnreadBadge   = lipgloss.NewStyle().Foreground(cLimit).Bold(true)
+	styleOverdueBadge  = lipgloss.NewStyle().Foreground(cPhoenix).Bold(true)
+	styleNavActive     = lipgloss.NewStyle().Foreground(cArc)
+	styleSidebarMore   = lipgloss.NewStyle().Foreground(cChrome)
 	styleSidebarBorder = lipgloss.NewStyle().BorderStyle(lipgloss.NormalBorder()).
 				BorderRight(true).BorderForeground(cSteel)
 
@@ -79,6 +82,8 @@ func kindGlyph(kind string) string {
 		return "◇"
 	case "thread":
 		return "↳"
+	case "discussion":
+		return "◈"
 	default:
 		return "·"
 	}

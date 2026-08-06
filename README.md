@@ -11,16 +11,21 @@ rides the workspace's metered inference proxy and uses tools to read and
 act on your workspace.
 
 ```
-┌ sidebar ──┬ feed ────────────────────────────────┐
-│ ◢ Acme    │ # general  Company-wide announcements │
-│ CHANNELS  │ ── Mon, Aug 3 ──                      │
-│ ▸ # general 2 │ Alice Chen  12:57                 │
-│   # random    │ cable smoke test — markdown too   │
-│ AGENTS        │ Writer  12:57                     │
-│ ◇ researcher  │ …                                 │
-├───────────┴──────────────────────────────────────┤
-│ ● LIVE  Acme · saltare cum machina    tab·j/k·q  │
-└──────────────────────────────────────────────────┘
+┌ sidebar ──────┬ feed ─────────────────────────────┐
+│ ◢ Acme        │ # general  Company-wide announce…  │
+│   ⌂ home      │ ── Mon, Aug 3 ──                   │
+│   ◉ inbox 4   │ Alice Chen  12:57                  │
+│   ☑ my work 2 │ cable smoke test — markdown too    │
+│   ▤ documents │ Writer  12:57                      │
+│ CHANNELS      │ …                                  │
+│ ▸ # general 2 │                                    │
+│ AGENTS        │                                    │
+│   ◇ researcher│                                    │
+│ RECENT        │                                    │
+│   ↳ Q3 launch │                                    │
+├───────────────┴────────────────────────────────────┤
+│ ● LIVE  Acme · saltare cum machina     tab·j/k·q   │
+└────────────────────────────────────────────────────┘
 ```
 
 ## Install
@@ -97,7 +102,17 @@ uploads it, type anything else to live-search existing uploads — enter
 inserts `[[upload:slug]]` at your cursor either way (also on the palette
 as "attach file…").
 
-`tab` cycles composer → sidebar → feed. Sidebar: `j/k` move, `enter` opens.
+`tab` cycles composer → sidebar → feed.
+
+**Sidebar**: a **nav rail** (`⌂ home`, `◉ inbox`, `☑ my work`, `▤ documents`,
+`⇱ files`, `▦ databases`) sits above the channel list; the rail row for
+whatever is on screen reads in arc, and inbox / my work carry unread and
+overdue badges. `j/k` move — a channel opens as the cursor lands on it,
+while rail rows switch mode only on `enter` (so you can pass over them).
+`n`/`N` jump to the next/previous channel with unread messages. Threads and
+task discussions you open this session collect under **RECENT**, freshest
+first, so a thread stays one keypress away after you leave it. The list
+scrolls with the cursor and counts what's off-screen (`↑ 12 more`).
 Feed focus is **selection mode**: `j/k` moves a message cursor (arc gutter
 bar); `t` opens the selected message's thread, or arms *reply-in-new-thread*
 if it has none — your reply creates the thread and the view follows it.

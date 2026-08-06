@@ -97,4 +97,30 @@ func TestSetChannelsSeedsUnread(t *testing.T) {
 	}
 }
 
+func TestSetChannelsKeepsOpenedThreads(t *testing.T) {
+	s := New()
+	s.SetChannels([]api.Channel{
+		{ID: 1, Slug: "general", Kind: "public_channel", Member: true},
+		{ID: 2, Slug: "old-dm", Kind: "dm", Member: true},
+	})
+	s.Upsert(api.Channel{ID: 7, Slug: "thread-abc", Kind: "thread", Member: true})
+	s.unread[7] = 2 // a live reply landed while the thread was open
+
+	// A refresh returns only the listable channels — and drops the DM.
+	s.SetChannels([]api.Channel{{ID: 1, Slug: "general", Kind: "public_channel", Member: true}})
+
+	if _, ok := s.Channel(7); !ok {
+		t.Fatal("a channel refresh must not forget an opened thread")
+	}
+	if s.Unread(7) != 2 {
+		t.Fatalf("a preserved thread keeps its unread count; got %d", s.Unread(7))
+	}
+	if _, ok := s.Channel(2); ok {
+		t.Fatal("a listable channel the server stopped returning must drop out")
+	}
+	if got := len(s.Channels()); got != 2 {
+		t.Fatalf("want general + the thread, got %d channels", got)
+	}
+}
+
 func ptr[T any](v T) *T { return &v }

@@ -950,7 +950,7 @@ func (m *Model) refreshAssist() {
 func (m Model) handleChannelsLoaded(msg channelsLoadedMsg) (Model, tea.Cmd) {
 	m.store.SetChannels(msg.channels)
 	m.rebuildSidebar()
-	if len(m.items) == 0 {
+	if !hasConversation(m.items) {
 		m.fatal = fmt.Errorf("no channels visible; join one on the web first")
 		return m, tea.Quit
 	}
@@ -1209,6 +1209,10 @@ func (m Model) handleSidebarKey(key string) (tea.Model, tea.Cmd) {
 		return m.moveSelection(1)
 	case "k", "up":
 		return m.moveSelection(-1)
+	case "n":
+		return m.jumpUnread(1)
+	case "N":
+		return m.jumpUnread(-1)
 	case "enter", "l", "right":
 		return m.openSelected(true)
 	}
@@ -2676,11 +2680,35 @@ func (m Model) moveSelection(delta int) (tea.Model, tea.Cmd) {
 		return m, nil
 	}
 	m.selected = next
+	if m.items[next].isNav() {
+		return m, nil // rail rows switch mode on enter, never on cursor movement
+	}
 	return m.openSelected(false)
 }
 
+// jumpUnread moves the cursor to the next (or previous) channel with unread
+// messages, wrapping — the sidebar's answer to a long list.
+func (m Model) jumpUnread(delta int) (tea.Model, tea.Cmd) {
+	n := len(m.items)
+	for step := 1; step <= n; step++ {
+		idx := ((m.selected+delta*step)%n + n) % n
+		it := m.items[idx]
+		if it.channel != nil && m.store.Unread(it.channel.ID) > 0 {
+			m.selected = idx
+			return m.openSelected(false)
+		}
+	}
+	return m, m.showToast("no unread channels")
+}
+
 func (m Model) openSelected(focusComposerAfter bool) (tea.Model, tea.Cmd) {
+	if m.selected < 0 || m.selected >= len(m.items) {
+		return m, nil
+	}
 	it := m.items[m.selected]
+	if it.isNav() {
+		return m.runNav(it.nav)
+	}
 	m.stashDraft() // before edit state clears — an in-flight edit is not a draft
 	m.threadReturn = 0
 	m.replyTo = nil
@@ -2710,6 +2738,34 @@ func (m Model) openSelected(focusComposerAfter bool) (tea.Model, tea.Cmd) {
 	}
 	m.updatePlaceholder()
 	return m, tea.Batch(cmds...)
+}
+
+// runNav activates a rail row. Each branch is the same entry point the palette
+// action uses, so the two surfaces can't drift.
+func (m Model) runNav(key string) (tea.Model, tea.Cmd) {
+	switch key {
+	case navHome:
+		return m.goHome()
+	case navInbox:
+		return m, m.fetchNotifications()
+	case navTasks:
+		m.view = viewTasks
+		m.tasks.active = true
+		m.tasks.detail = nil
+		m.tasks.agenda = false
+		m.tasks.mine = true
+		m.tasks.loading = true
+		m.tasks.fetchGen++
+		m.comp.blur()
+		return m, m.fetchTasks()
+	case navDocs:
+		return m.openDocs()
+	case navFiles:
+		return m.openFiles("")
+	case navDB:
+		return m.openDB()
+	}
+	return m, nil
 }
 
 func (m Model) openThreadPicker() (tea.Model, tea.Cmd) {
@@ -2934,10 +2990,58 @@ func (m Model) handleCable(ev cable.Event) (tea.Model, tea.Cmd) {
 // ── Layout & view ───────────────────────────────────────────────────────
 
 func (m *Model) rebuildSidebar() {
-	m.items = buildSidebar(m.store.Channels(), m.agents)
-	if m.selected >= len(m.items) {
-		m.selected = 0
+	m.items = append(navItems(), buildSidebar(m.store.Channels(), m.agents)...)
+
+	if m.selected >= 0 && m.selected < len(m.items) && m.items[m.selected].isNav() {
+		return // a rail row is the cursor — a channel refresh must not steal it
 	}
+	// Otherwise keep the cursor on the open channel: its index moves whenever
+	// the RECENT rows reshuffle.
+	if m.focusedID != 0 {
+		for i, it := range m.items {
+			if it.channel != nil && it.channel.ID == m.focusedID {
+				m.selected = i
+				return
+			}
+		}
+	}
+	if m.selected < 0 || m.selected >= len(m.items) {
+		m.selected = firstUnreadItem(m.store, m.items)
+	}
+}
+
+// railCounts are the nav rail's badges. The overdue count is only honest while
+// the tasks pane holds the my-work list, so it's suppressed otherwise.
+func (m Model) railCounts() navCounts {
+	counts := navCounts{}
+	if m.home.notifLoaded {
+		counts.inbox = m.home.notifCount
+	}
+	if m.tasks.mine && !m.tasks.agenda {
+		overdue, _, _ := homeSections(m.tasks.tasks, time.Now())
+		counts.overdue = len(overdue)
+	}
+	return counts
+}
+
+// activeNavKey is the rail row standing for whatever is on screen, so the pane
+// always answers "where am I". Chat has no rail row — a channel row is lit.
+func (m Model) activeNavKey() string {
+	switch {
+	case m.notify.active:
+		return navInbox
+	case m.view == viewHome:
+		return navHome
+	case m.view == viewTasks:
+		return navTasks
+	case m.view == viewDocs:
+		return navDocs
+	case m.view == viewFiles:
+		return navFiles
+	case m.view == viewDB:
+		return navDB
+	}
+	return ""
 }
 
 func (m *Model) updatePlaceholder() {
@@ -3009,7 +3113,15 @@ func (m Model) View() string {
 		return styleFeedTopic.Render(m.loadingMsg) + "\n"
 	}
 
-	sidebar := renderSidebar(m.store, m.cfg.WorkspaceName, m.items, m.selected, m.focus == focusSidebar, m.height-1)
+	sidebar := renderSidebar(m.store, sidebarState{
+		workspace: m.cfg.WorkspaceName,
+		items:     m.items,
+		selected:  m.selected,
+		focused:   m.focus == focusSidebar,
+		activeNav: m.activeNavKey(),
+		counts:    m.railCounts(),
+		height:    m.height - 1,
+	})
 
 	feedWidth := m.width - sidebarWidth - 1
 	var pane string
@@ -3134,11 +3246,41 @@ func (m Model) statusBar() string {
 	return left + styleStatusBar.Render(strings.Repeat(" ", gap)) + keys
 }
 
+// firstUnreadItem is the boot cursor: the first unread channel, else the first
+// channel, else the first agent stub. Never a nav row — those don't open a feed.
 func firstUnreadItem(s *store.Store, items []sidebarItem) int {
+	channel, stub := -1, -1
 	for i, it := range items {
-		if it.channel != nil && s.Unread(it.channel.ID) > 0 {
-			return i
+		switch {
+		case it.channel != nil:
+			if s.Unread(it.channel.ID) > 0 {
+				return i
+			}
+			if channel < 0 {
+				channel = i
+			}
+		case it.isAgentStub():
+			if stub < 0 {
+				stub = i
+			}
 		}
 	}
+	switch {
+	case channel >= 0:
+		return channel
+	case stub >= 0:
+		return stub
+	}
 	return 0
+}
+
+// hasConversation reports whether anything openable exists — the nav rail is
+// always present, so item count alone no longer answers it.
+func hasConversation(items []sidebarItem) bool {
+	for _, it := range items {
+		if it.channel != nil || it.agent != nil {
+			return true
+		}
+	}
+	return false
 }
