@@ -53,6 +53,8 @@ func main() {
 		err = runLogin(args)
 	case "logout":
 		err = runLogout()
+	case "doctor":
+		err = runDoctor(args)
 	case "channels":
 		err = runChannels(args)
 	case "send":
@@ -97,6 +99,7 @@ usage:
        --server URL    (default http://localhost:3000)
        --email E       --workspace SLUG   --password-stdin
   sal logout           revoke this device's session
+  sal doctor           diagnose the session: config, tokens, server, identity
   sal channels         list channels      --json
   sal send CHANNEL MSG post a message (reads stdin when MSG omitted)
   sal tail CHANNEL     stream a channel's messages to stdout

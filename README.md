@@ -55,6 +55,7 @@ go build -o sal ./cmd/sal
 | `sal` | Launch the TUI |
 | `sal login` | Sign in — mints a **user-bound device session** (`platform: cli`); flags: `--server`, `--email`, `--workspace`, `--password-stdin` |
 | `sal logout` | Revoke the device session server-side and clear local tokens |
+| `sal doctor` | Diagnose a broken session: config, token store + expiry, server reachability, who the server says you are, and config/server identity drift. Exits non-zero on any failure |
 | `sal channels` | List channels (`--json` for scripts, `--kind` to filter) |
 | `sal send CHANNEL [MSG]` | Post a message (reads stdin when MSG omitted) |
 | `sal tail CHANNEL` | Stream a channel's messages to stdout (`-n` recent history first) |

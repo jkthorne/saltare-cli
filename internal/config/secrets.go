@@ -67,6 +67,23 @@ func LoadTokens() (Tokens, error) {
 	return t, nil
 }
 
+// TokensSource reports where LoadTokens would read from: "keychain", "file
+// <path>", or "none". A locked or unavailable keychain silently demotes sal to
+// the file fallback, which is worth seeing when diagnosing a broken session.
+func TokensSource() string {
+	if _, err := keyring.Get(keyringService, keyringUser); err == nil {
+		return "keychain"
+	}
+	p, err := credsPath()
+	if err != nil {
+		return "unknown"
+	}
+	if _, err := os.Stat(p); err == nil {
+		return "file " + p
+	}
+	return "none"
+}
+
 func DeleteTokens() error {
 	// Best-effort on both stores; only report unexpected file errors.
 	_ = keyring.Delete(keyringService, keyringUser)
