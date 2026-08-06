@@ -132,7 +132,8 @@ func TestBuildSidebarMergesAgents(t *testing.T) {
 
 func TestRenderEmbedChips(t *testing.T) {
 	in := "see [[task:fix-login]] and ![[doc:api-spec]] plus [[not an embed]]"
-	got := renderEmbedChips(in)
+	tokenized, refs := tokenizeEmbeds(in)
+	got := restoreEmbedChips(tokenized, refs, webLinks{})
 	if !strings.Contains(got, "⟨task:fix-login⟩") {
 		t.Fatalf("inline chip missing: %q", got)
 	}

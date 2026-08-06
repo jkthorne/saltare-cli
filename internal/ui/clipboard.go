@@ -1,9 +1,7 @@
 package ui
 
 import (
-	"fmt"
 	"os"
-	"strings"
 
 	osc52 "github.com/aymanbagabas/go-osc52/v2"
 )
@@ -20,15 +18,11 @@ func copyToClipboard(text string) error {
 	return err
 }
 
-// messagePermalink builds the canonical web URL for a message: thread
-// channels live at /t/:slug, everything else at /channels/:slug.
+// messagePermalink is the canonical web URL for a message. It shares webLinks
+// with the OSC 8 hyperlinks the feed emits, so a copied URL and a clicked one
+// can't drift apart.
 func (m *Model) messagePermalink(channelKind, channelSlug string, messageID int64) string {
-	base := strings.TrimRight(m.cfg.ServerURL, "/") + "/w/" + m.cfg.WorkspaceSlug
-	path := "/channels/" + channelSlug
-	if channelKind == "thread" {
-		path = "/t/" + channelSlug
-	}
-	return fmt.Sprintf("%s%s#message_%d", base, path, messageID)
+	return m.links.message(channelKind, channelSlug, messageID)
 }
 
 // copyRowReference copies whatever travels best for a search row: messages

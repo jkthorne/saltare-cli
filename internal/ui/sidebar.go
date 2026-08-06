@@ -3,7 +3,6 @@ package ui
 import (
 	"fmt"
 	"sort"
-	"strings"
 
 	"github.com/charmbracelet/lipgloss"
 
@@ -210,49 +209,59 @@ type sidebarState struct {
 	height    int
 }
 
+// sidebarHeaderLines is the pinned block above the scrolling row list: the
+// workspace name and a blank line. A click's y maps into the window past it.
+const sidebarHeaderLines = 2
+
 func renderSidebar(s *store.Store, st sidebarState) string {
-	header := []string{styleSidebarHeader.Render(truncate("◢ "+st.workspace, sidebarWidth-2)), ""}
-
-	body, selLine := sidebarBody(s, st)
-	rows := append(header, sidebarWindow(body, selLine, st.height-len(header))...)
-
+	rows := sidebarVisible(s, st)
 	col := lipgloss.NewStyle().Width(sidebarWidth).Height(st.height).MaxHeight(st.height).
-		Render(strings.Join(rows, "\n"))
+		Render(rows.join())
 	return styleSidebarBorder.Render(col)
 }
 
-// sidebarBody renders every row below the pinned header and reports which line
-// carries the cursor, so the window can keep it on screen.
-func sidebarBody(s *store.Store, st sidebarState) (lines []string, selLine int) {
-	selLine = -1
+// sidebarVisible is the whole rendered column — pinned header plus the scrolled
+// window — with each line's item recorded. renderSidebar draws it; the mouse hit
+// test indexes it. Deriving both from one builder is what keeps a click on a
+// scrolled list landing on the row the user is actually looking at.
+func sidebarVisible(s *store.Store, st sidebarState) *rowBuilder {
+	out := &rowBuilder{}
+	out.chrome(styleSidebarHeader.Render(truncate("◢ "+st.workspace, sidebarWidth-2)), "")
+
+	body := sidebarBody(s, st)
+	out.appendAll(sidebarWindow(body, body.lineOf(st.selected), st.height-sidebarHeaderLines))
+	return out
+}
+
+// sidebarBody renders every row below the pinned header, tagging each line with
+// the item index it draws so the window and the hit test can follow it.
+func sidebarBody(s *store.Store, st sidebarState) *rowBuilder {
+	b := &rowBuilder{}
 	lastGroup := ""
 	for idx, it := range st.items {
 		if g := it.group(); g != lastGroup {
-			if len(lines) > 0 {
-				lines = append(lines, "")
+			if b.len() > 0 {
+				b.chrome("")
 			}
 			if g != "" {
-				lines = append(lines, styleGroupLabel.Render(g))
+				b.chrome(styleGroupLabel.Render(g))
 			}
 			lastGroup = g
 		}
-		if idx == st.selected {
-			selLine = len(lines)
-		}
-		lines = append(lines, sidebarRow(s, it, idx == st.selected, st.focused, st.activeNav, st.counts))
+		b.row(sidebarRow(s, it, idx == st.selected, st.focused, st.activeNav, st.counts), idx)
 	}
-	return lines, selLine
+	return b
 }
 
 // sidebarWindow scrolls the row list so the cursor stays visible, replacing the
 // edge lines with hidden-row counts. Without this the pane silently clipped
 // everything past the terminal height — the cursor could sit off-screen.
-func sidebarWindow(lines []string, selLine, avail int) []string {
+func sidebarWindow(b *rowBuilder, selLine, avail int) *rowBuilder {
 	if avail <= 0 {
-		return nil
+		return &rowBuilder{}
 	}
-	if len(lines) <= avail {
-		return lines
+	if b.len() <= avail {
+		return b
 	}
 
 	// Scroll only once the cursor nears the bottom edge, so short lists stay
@@ -265,18 +274,19 @@ func sidebarWindow(lines []string, selLine, avail int) []string {
 	if selLine > avail-margin {
 		offset = selLine - avail + margin
 	}
-	if maxOffset := len(lines) - avail; offset > maxOffset {
+	if maxOffset := b.len() - avail; offset > maxOffset {
 		offset = maxOffset
 	}
 
-	visible := make([]string, avail)
-	copy(visible, lines[offset:offset+avail])
-	// The counts overwrite an edge row, so never one holding the cursor.
+	visible := b.slice(offset, avail)
+	// The counts overwrite an edge row, so never one holding the cursor. replace
+	// clears the target too — a "↑ 3 more" line must not open the channel whose
+	// row it covers.
 	if offset > 0 && offset != selLine {
-		visible[0] = styleSidebarMore.Render(fmt.Sprintf("  ↑ %d more", offset))
+		visible.replace(0, styleSidebarMore.Render(fmt.Sprintf("  ↑ %d more", offset)))
 	}
-	if below := len(lines) - offset - avail; below > 0 && offset+avail-1 != selLine {
-		visible[avail-1] = styleSidebarMore.Render(fmt.Sprintf("  ↓ %d more", below))
+	if below := b.len() - offset - avail; below > 0 && offset+avail-1 != selLine {
+		visible.replace(avail-1, styleSidebarMore.Render(fmt.Sprintf("  ↓ %d more", below)))
 	}
 	return visible
 }

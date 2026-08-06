@@ -2,7 +2,6 @@ package ui
 
 import (
 	"fmt"
-	"strings"
 	"time"
 
 	tea "github.com/charmbracelet/bubbletea"
@@ -173,56 +172,71 @@ func (m Model) handleHomeKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		return m, tea.Batch(m.fetchChannels(), m.fetchTasks(), m.fetchNotificationCount())
 	case "enter":
 		rows := m.homeRows()
-		if m.home.sel >= len(rows) || !rows[m.home.sel].selectable() {
+		if m.home.sel >= len(rows) {
 			return m, nil
 		}
-		row := rows[m.home.sel]
-		switch {
-		case row.notif:
-			return m, m.fetchNotifications()
-		case row.channelID != 0:
-			// openSelected skips snapshot+markRead for the already-focused
-			// channel, so that jump goes through leaveHomeToChat instead.
-			if row.channelID == m.focusedID {
-				return m.leaveHomeToChat()
-			}
-			m.view = viewChat
-			return m.openChannelByID(row.channelID)
-		case row.task != nil:
-			m.view = viewTasks
-			m.tasks.active = true
-			task := *row.task
-			m.tasks.detail = &task
-			m.tasks.returnHome = true
-			return m, nil
-		}
+		return m.activateHomeRow(rows[m.home.sel])
 	}
 	return m, nil
 }
 
-func (m Model) renderHome(width, height int) string {
-	rows := m.homeRows()
+// activateHomeRow opens whatever a dashboard row stands for. Shared by enter and
+// by a click, so the two can't drift.
+func (m Model) activateHomeRow(row homeRow) (tea.Model, tea.Cmd) {
+	switch {
+	case !row.selectable():
+		return m, nil
+	case row.notif:
+		return m, m.fetchNotifications()
+	case row.channelID != 0:
+		// openSelected skips snapshot+markRead for the already-focused
+		// channel, so that jump goes through leaveHomeToChat instead.
+		if row.channelID == m.focusedID {
+			return m.leaveHomeToChat()
+		}
+		m.view = viewChat
+		return m.openChannelByID(row.channelID)
+	case row.task != nil:
+		m.view = viewTasks
+		m.tasks.active = true
+		task := *row.task
+		m.tasks.detail = &task
+		m.tasks.returnHome = true
+		return m, nil
+	}
+	return m, nil
+}
+
+// homeLines lays the dashboard out, tagging each line with the homeRows index it
+// draws. A section header emits a blank spacer as well as its label, so line
+// numbers run ahead of row numbers — the builder is what tracks the drift.
+func (m Model) homeLines(rows []homeRow, width int) *rowBuilder {
 	today := time.Now().Format("2006-01-02")
 
-	var lines []string
-	lines = append(lines, stylePickerTitle.Render("⌂ home — "+m.cfg.WorkspaceName), "")
+	b := &rowBuilder{}
+	b.chrome(stylePickerTitle.Render("⌂ home — "+m.cfg.WorkspaceName), "")
 	for i, row := range rows {
 		selected := i == m.home.sel && row.selectable()
 		switch {
 		case row.header:
-			lines = append(lines, "", styleFeedTopic.Render(row.label))
+			b.chrome("", styleFeedTopic.Render(row.label))
 		case row.task != nil:
-			lines = append(lines, m.tasks.taskRow(*row.task, selected, today, width))
+			b.row(m.tasks.taskRow(*row.task, selected, today, width), i)
 		case row.selectable():
 			if selected {
-				lines = append(lines, stylePickerSel.Render("▸ "+truncate(row.label, width-6)))
+				b.row(stylePickerSel.Render("▸ "+truncate(row.label, width-6)), i)
 			} else {
-				lines = append(lines, stylePickerRow.Render("  "+truncate(row.label, width-6)))
+				b.row(stylePickerRow.Render("  "+truncate(row.label, width-6)), i)
 			}
 		default:
-			lines = append(lines, styleFeedTopic.Render("  "+truncate(row.label, width-6)))
+			b.chrome(styleFeedTopic.Render("  " + truncate(row.label, width-6)))
 		}
 	}
-	lines = append(lines, "", styleFeedTopic.Render("j/k move · enter open · r refresh · esc chat · ctrl+k palette"))
-	return styleTasksPane.Width(width).Height(height).MaxHeight(height).Render(strings.Join(lines, "\n"))
+	b.chrome("", styleFeedTopic.Render("j/k move · enter open · r refresh · esc chat · ctrl+k palette"))
+	return b
+}
+
+func (m Model) renderHome(width, height int) string {
+	body := m.homeLines(m.homeRows(), width).join()
+	return styleTasksPane.Width(width).Height(height).MaxHeight(height).Render(body)
 }

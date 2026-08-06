@@ -22,6 +22,7 @@ type docsView struct {
 	viewing  *api.Document // non-nil = reader open
 	vp       viewport.Model
 	renderer *feedRenderer
+	links    webLinks
 
 	inputOpen bool // new-document title prompt
 	input     textinput.Model
@@ -42,11 +43,11 @@ type docConflict struct {
 	body string
 }
 
-func newDocsView() docsView {
+func newDocsView(links webLinks) docsView {
 	ti := textinput.New()
 	ti.Placeholder = "document title…"
 	ti.Prompt = "▤ "
-	return docsView{input: ti, renderer: newFeedRenderer(80)}
+	return docsView{input: ti, links: links, renderer: newFeedRenderer(80, links)}
 }
 
 func (d *docsView) resize(width, height int) {
@@ -81,14 +82,15 @@ func (d *docsView) showDocument(doc *api.Document) {
 		d.vp.GotoTop()
 		return
 	}
+	source, refs := tokenizeEmbeds(body)
 	if d.renderer.markdown != nil {
-		if out, err := d.renderer.markdown.Render(body); err == nil {
-			d.vp.SetContent(renderEmbedChips(strings.Trim(out, "\n")))
+		if out, err := d.renderer.markdown.Render(source); err == nil {
+			d.vp.SetContent(restoreEmbedChips(strings.Trim(out, "\n"), refs, d.links))
 			d.vp.GotoTop()
 			return
 		}
 	}
-	d.vp.SetContent(renderEmbedChips(wrapPlain(body, d.vp.Width-2)))
+	d.vp.SetContent(restoreEmbedChips(wrapPlain(source, d.vp.Width-2), refs, d.links))
 	d.vp.GotoTop()
 }
 

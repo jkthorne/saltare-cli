@@ -202,6 +202,14 @@ type Model struct {
 	fatal      error
 	sending    bool
 
+	// mouse mirrors whether the program is tracking mouse events, so the
+	// palette's toggle knows which way to flip. The program option is set from
+	// the same config value in cmd/sal.
+	mouse bool
+	// rects is the frame View draws into and mouse hit-testing reads back.
+	rects paneRects
+	links webLinks
+
 	vp       viewport.Model
 	comp     composer
 	renderer *feedRenderer
@@ -213,18 +221,21 @@ type Model struct {
 func (m Model) Fatal() error { return m.fatal }
 
 func NewModel(ctx context.Context, cfg *config.Config, client *api.Client) Model {
+	links := webLinks{server: cfg.ServerURL, workspace: cfg.WorkspaceSlug}
 	m := Model{
 		cfg:        cfg,
 		client:     client,
 		store:      store.New(),
 		ctx:        ctx,
 		loadingMsg: "connecting to " + cfg.ServerURL + " …",
-		renderer:   newFeedRenderer(80),
+		links:      links,
+		mouse:      cfg.MouseEnabled(),
+		renderer:   newFeedRenderer(80, links),
 		comp:       newComposer(),
 		pal:        newPalette(),
 		tasks:      newTasksView(),
 		search:     newSearchView(),
-		docs:       newDocsView(),
+		docs:       newDocsView(links),
 		files:      newFilesView(),
 		db:         newDBView(),
 		attach:     newAttachView(),
@@ -557,6 +568,9 @@ func (m Model) Update(msg tea.Msg) (tea.Model, tea.Cmd) {
 
 	case tea.KeyMsg:
 		return m.handleKey(msg)
+
+	case tea.MouseMsg:
+		return m.handleMouse(msg)
 
 	case channelsLoadedMsg:
 		return m.handleChannelsLoaded(msg)
@@ -1197,7 +1211,15 @@ func (m Model) handleComposerKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 	}
+	// The composer grows and shrinks as the user types, and the feed viewport and
+	// the hit-test rects are both sized from its height — so re-lay out whenever
+	// it moves. Without this the pane is a line taller than the frame while a
+	// multi-line draft is open.
+	before := m.comp.height() + m.comp.popupHeight()
 	cmd := m.comp.update(msg)
+	if m.comp.height()+m.comp.popupHeight() != before {
+		m.refreshFeed(false)
+	}
 	return m, cmd
 }
 
@@ -1740,6 +1762,7 @@ func (m Model) openPalette() (tea.Model, tea.Cmd) {
 		paletteItem{label: "☷ agenda: next 7 days", action: actionAgenda},
 		paletteItem{label: "☐ new task…", action: actionNewTask},
 		paletteItem{label: "◉ notifications", action: actionNotifications},
+		paletteItem{label: mouseToggleLabel(m.mouse), hint: "off restores drag-to-select", action: actionMouse},
 	)
 	m.comp.blur()
 	return m, m.pal.open(items)
@@ -1798,6 +1821,8 @@ func (m Model) runPaletteItem(item paletteItem) (tea.Model, tea.Cmd) {
 		return m.openAttach()
 	case actionDB:
 		return m.openDB()
+	case actionMouse:
+		return m.toggleMouse()
 	case actionAssistant:
 		if !m.assist.active {
 			return m.toggleAssistant()
@@ -2116,7 +2141,20 @@ func (m Model) startDocEdit(doc api.Document) (tea.Model, tea.Cmd) {
 	})
 }
 
+// handleEditorFinished resumes after the $EDITOR round trip and re-arms mouse
+// tracking. tea.ExecProcess releases the terminal to the editor, and its
+// RestoreTerminal brings back the alt screen and bracketed paste but *not* the
+// mouse — so without this one document edit would kill clicking and scrolling
+// for the rest of the session.
 func (m Model) handleEditorFinished(msg editorFinishedMsg) (tea.Model, tea.Cmd) {
+	next, cmd := m.resumeFromEditor(msg)
+	if model, ok := next.(Model); ok && model.mouse {
+		return next, tea.Batch(cmd, tea.EnableMouseCellMotion)
+	}
+	return next, cmd
+}
+
+func (m Model) resumeFromEditor(msg editorFinishedMsg) (tea.Model, tea.Cmd) {
 	d := &m.docs
 	slug, path := d.editSlug, d.editPath
 	if slug == "" {
@@ -3066,10 +3104,9 @@ func (m *Model) updatePlaceholder() {
 }
 
 func (m *Model) layout() {
-	feedWidth := m.width - sidebarWidth - 1
-	if feedWidth < 20 {
-		feedWidth = 20
-	}
+	feedWidth := m.paneWidth()
+	// The pane spends its height on the feed title, the mention popup, the
+	// composer bar, the composer itself, and the status bar.
 	feedHeight := m.height - 3 - m.comp.height() - m.comp.popupHeight()
 	if feedHeight < 3 {
 		feedHeight = 3
@@ -3082,6 +3119,25 @@ func (m *Model) layout() {
 	}
 	m.renderer.Resize(feedWidth)
 	m.comp.setWidth(feedWidth)
+
+	// Rects last: they describe what the sizes above just decided.
+	paneX := sidebarWidth + 1 // the sidebar's right border owns one column
+	mainHeight := m.height - 1
+	m.rects = paneRects{
+		sidebar:  rect{x: 0, y: 0, w: paneX, h: mainHeight},
+		pane:     rect{x: paneX, y: 0, w: feedWidth, h: mainHeight},
+		feed:     rect{x: paneX, y: feedTopLine, w: feedWidth, h: feedHeight},
+		composer: rect{x: paneX, y: feedTopLine + feedHeight + m.comp.popupHeight() + 1, w: feedWidth, h: m.comp.height()},
+		status:   rect{x: 0, y: mainHeight, w: m.width, h: 1},
+	}
+}
+
+// paneWidth is everything right of the sidebar and its border.
+func (m Model) paneWidth() int {
+	if w := m.width - sidebarWidth - 1; w > 20 {
+		return w
+	}
+	return 20
 }
 
 func (m *Model) refreshFeed(jump bool) {
@@ -3097,11 +3153,29 @@ func (m *Model) refreshFeed(jump bool) {
 		m.vp.SetContent(styleFeedTopic.Render("no conversation yet — say hello to " + m.pendingAgent.Name))
 		return
 	}
-	content, blocks := m.renderer.Render(m.store.Messages(m.focusedID), m.feedSel, m.firstUnreadID())
+	var channel *api.Channel
+	if c, ok := m.store.Channel(m.focusedID); ok {
+		channel = &c
+	}
+	content, blocks := m.renderer.Render(m.store.Messages(m.focusedID), channel, m.feedSel, m.firstUnreadID())
 	m.feedBlocks = blocks
 	m.vp.SetContent(content)
 	if jump || wasAtBottom {
 		m.vp.GotoBottom()
+	}
+}
+
+// sidebarState is the pane's whole input. View renders from it and the mouse hit
+// test rebuilds from it, so both see the same column.
+func (m Model) sidebarState() sidebarState {
+	return sidebarState{
+		workspace: m.cfg.WorkspaceName,
+		items:     m.items,
+		selected:  m.selected,
+		focused:   m.focus == focusSidebar,
+		activeNav: m.activeNavKey(),
+		counts:    m.railCounts(),
+		height:    m.height - 1,
 	}
 }
 
@@ -3113,17 +3187,9 @@ func (m Model) View() string {
 		return styleFeedTopic.Render(m.loadingMsg) + "\n"
 	}
 
-	sidebar := renderSidebar(m.store, sidebarState{
-		workspace: m.cfg.WorkspaceName,
-		items:     m.items,
-		selected:  m.selected,
-		focused:   m.focus == focusSidebar,
-		activeNav: m.activeNavKey(),
-		counts:    m.railCounts(),
-		height:    m.height - 1,
-	})
+	sidebar := renderSidebar(m.store, m.sidebarState())
 
-	feedWidth := m.width - sidebarWidth - 1
+	feedWidth := m.paneWidth()
 	var pane string
 	switch {
 	case m.pal.active:
@@ -3180,10 +3246,13 @@ func (m Model) feedTitle(width int) string {
 	if !ok {
 		return ""
 	}
-	title := styleFeedTitle.Render(kindGlyph(c.Kind) + " " + c.Title())
+	// The channel name opens the channel on the web.
+	title := osc8(m.links.channel(c.Kind, c.Slug), styleFeedTitle.Render(kindGlyph(c.Kind)+" "+c.Title()))
 	if m.threadReturn != 0 {
 		if parent, ok := m.store.Channel(m.threadReturn); ok {
-			title = styleFeedTopic.Render(kindGlyph(parent.Kind)+" "+parent.Title()+" ▸ ") + styleFeedTitle.Render("↳ "+c.Name)
+			title = osc8(m.links.channel(parent.Kind, parent.Slug),
+				styleFeedTopic.Render(kindGlyph(parent.Kind)+" "+parent.Title()+" ▸ ")) +
+				osc8(m.links.channel(c.Kind, c.Slug), styleFeedTitle.Render("↳ "+c.Name))
 		}
 	} else if c.Description != nil && *c.Description != "" {
 		title += "  " + styleFeedTopic.Render(truncate(*c.Description, width-lipgloss.Width(title)-2))

@@ -229,6 +229,14 @@ func (t *tasksView) renderDetail(r *feedRenderer, width, height int) string {
 	task := t.detail
 	today := time.Now().Format("2006-01-02")
 
+	// The renderer carries the workspace URL context, and it is optional here
+	// (the markdown path below already guards on nil). A zero webLinks yields no
+	// URLs, so a nil renderer degrades to unlinked text rather than broken links.
+	var links webLinks
+	if r != nil {
+		links = r.links
+	}
+
 	title := stateGlyph(task.State) + " " + task.Title
 	titleStyle := styleFeedTitle
 	if task.State == "completed" || task.State == "cancelled" {
@@ -236,7 +244,9 @@ func (t *tasksView) renderDetail(r *feedRenderer, width, height int) string {
 	}
 
 	var rows []string
-	rows = append(rows, titleStyle.Render(truncate(title, width-6)))
+	// Linked after truncation — truncate slices runes and would cut an escape
+	// sequence in half.
+	rows = append(rows, osc8(links.task(task.Slug), titleStyle.Render(truncate(title, width-6))))
 	breadcrumb := task.Slug
 	if name := t.projectName(task.ProjectID); name != "" {
 		breadcrumb = name + " ▸ " + breadcrumb
@@ -275,15 +285,15 @@ func (t *tasksView) renderDetail(r *feedRenderer, width, height int) string {
 	rows = append(rows, "")
 
 	if task.Description != nil && strings.TrimSpace(*task.Description) != "" {
-		desc := strings.TrimSpace(*task.Description)
+		desc, refs := tokenizeEmbeds(strings.TrimSpace(*task.Description))
 		rendered := ""
 		if r != nil && r.markdown != nil {
 			if out, err := r.markdown.Render(desc); err == nil {
-				rendered = renderEmbedChips(strings.Trim(out, "\n"))
+				rendered = restoreEmbedChips(strings.Trim(out, "\n"), refs, links)
 			}
 		}
 		if rendered == "" {
-			rendered = renderEmbedChips(wrapPlain(desc, width-6))
+			rendered = restoreEmbedChips(wrapPlain(desc, width-6), refs, links)
 		}
 		rows = append(rows, rendered)
 	} else {

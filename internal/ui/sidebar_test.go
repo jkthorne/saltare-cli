@@ -27,52 +27,79 @@ func lineOf(lines []string, want string) int {
 	return -1
 }
 
-func TestSidebarWindowKeepsCursorVisible(t *testing.T) {
+// rowsFrom makes each line its own item, so a windowed builder's targets can be
+// checked against the line letters.
+func rowsFrom(lines []string) *rowBuilder {
+	b := &rowBuilder{}
+	for i, l := range lines {
+		b.row(l, i)
+	}
+	return b
+}
+
+func alphabet(n int) []string {
 	var lines []string
-	for i := 0; i < 20; i++ {
+	for i := 0; i < n; i++ {
 		lines = append(lines, string(rune('a'+i)))
 	}
+	return lines
+}
 
-	visible := sidebarWindow(lines, 15, 10)
-	if len(visible) != 10 {
-		t.Fatalf("window must fill the available height; got %d lines", len(visible))
+func TestSidebarWindowKeepsCursorVisible(t *testing.T) {
+	visible := sidebarWindow(rowsFrom(alphabet(20)), 15, 10)
+	if visible.len() != 10 {
+		t.Fatalf("window must fill the available height; got %d lines", visible.len())
 	}
-	if lineOf(visible, "p") < 0 { // lines[15]
+	if lineOf(visible.lines, "p") < 0 { // lines[15]
 		t.Fatal("the cursor's row must be inside the window")
 	}
-	if !strings.Contains(visible[0], "↑ 8 more") {
-		t.Fatalf("hidden rows above must be counted; got %q", visible[0])
+	if !strings.Contains(visible.lines[0], "↑ 8 more") {
+		t.Fatalf("hidden rows above must be counted; got %q", visible.lines[0])
 	}
-	if !strings.Contains(visible[9], "↓ 2 more") {
-		t.Fatalf("hidden rows below must be counted; got %q", visible[9])
+	if !strings.Contains(visible.lines[9], "↓ 2 more") {
+		t.Fatalf("hidden rows below must be counted; got %q", visible.lines[9])
+	}
+}
+
+// A "more" marker covers a row, so it must not inherit that row's click target —
+// otherwise clicking the count opens whatever channel it is hiding.
+func TestSidebarWindowMoreMarkersAreNotClickable(t *testing.T) {
+	visible := sidebarWindow(rowsFrom(alphabet(20)), 15, 10)
+	if got := visible.target(0); got != noTarget {
+		t.Fatalf("the ↑ marker must have no target; got %d", got)
+	}
+	if got := visible.target(9); got != noTarget {
+		t.Fatalf("the ↓ marker must have no target; got %d", got)
+	}
+	// The window starts at line 8, so its second visible line is item 9.
+	if got := visible.target(1); got != 9 {
+		t.Fatalf("windowed rows must keep their item index; got %d", got)
 	}
 }
 
 func TestSidebarWindowNeverCoversTheCursor(t *testing.T) {
-	var lines []string
-	for i := 0; i < 20; i++ {
-		lines = append(lines, string(rune('a'+i)))
-	}
-
 	// Cursor on the last row: the window bottoms out, so no "more" count may
 	// take its line.
-	visible := sidebarWindow(lines, 19, 10)
-	if got := visible[9]; got != "t" {
+	visible := sidebarWindow(rowsFrom(alphabet(20)), 19, 10)
+	if got := visible.lines[9]; got != "t" {
 		t.Fatalf("last row must survive the window; got %q", got)
 	}
+	if got := visible.target(9); got != 19 {
+		t.Fatalf("the cursor row must stay clickable; got %d", got)
+	}
 	// A one-row window degenerates to the cursor alone rather than an indicator.
-	if one := sidebarWindow(lines, 5, 1); len(one) != 1 || one[0] != "f" {
-		t.Fatalf("single-row window must show the cursor; got %v", one)
+	if one := sidebarWindow(rowsFrom(alphabet(20)), 5, 1); one.len() != 1 || one.lines[0] != "f" {
+		t.Fatalf("single-row window must show the cursor; got %v", one.lines)
 	}
 }
 
 func TestSidebarWindowPassesShortListsThrough(t *testing.T) {
 	lines := []string{"a", "b", "c"}
-	if got := sidebarWindow(lines, 1, 10); len(got) != 3 {
-		t.Fatalf("a list that fits must not scroll; got %v", got)
+	if got := sidebarWindow(rowsFrom(lines), 1, 10); got.len() != 3 {
+		t.Fatalf("a list that fits must not scroll; got %v", got.lines)
 	}
-	if got := sidebarWindow(lines, 1, 0); got != nil {
-		t.Fatalf("no height means no rows; got %v", got)
+	if got := sidebarWindow(rowsFrom(lines), 1, 0); got.len() != 0 {
+		t.Fatalf("no height means no rows; got %v", got.lines)
 	}
 }
 
@@ -237,9 +264,10 @@ func TestRailRowRendersActiveAndBadged(t *testing.T) {
 		height:    40,
 	}
 
-	lines, selLine := sidebarBody(s, st)
-	if selLine < 0 {
-		t.Fatal("the cursor line must be reported for the scroll window")
+	body := sidebarBody(s, st)
+	lines := body.lines
+	if body.lineOf(st.selected) < 0 {
+		t.Fatal("the cursor line must be findable for the scroll window")
 	}
 	if i := lineOf(lines, "inbox"); i < 0 || !strings.Contains(lines[i], "4") {
 		t.Fatalf("inbox row must carry the unread count; got %q", lines[max(i, 0)])

@@ -82,7 +82,7 @@ func TestUnreadSeparatorPosition(t *testing.T) {
 		t.Fatalf("the rule belongs above the first foreign unread, got %d", got)
 	}
 
-	content, _ := m.renderer.Render(m.store.Messages(3), 0, 22)
+	content, _ := m.renderer.Render(m.store.Messages(3), &channel, 0, 22)
 	if !strings.Contains(content, "NEW") {
 		t.Fatal("the rendered feed must contain the NEW rule")
 	}

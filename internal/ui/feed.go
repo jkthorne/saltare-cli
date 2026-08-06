@@ -3,6 +3,7 @@ package ui
 import (
 	"fmt"
 	"regexp"
+	"strconv"
 	"strings"
 	"time"
 
@@ -12,12 +13,11 @@ import (
 	"github.com/jkthorne/saltare/cli/internal/api"
 )
 
-// embedPattern matches Saltare cross-references — [[type:slug]] inline chips
-// and ![[type:slug]] block cards — which glamour passes through verbatim.
+// embedPattern matches Saltare cross-references — [[type:slug]] inline chips and
+// ![[type:slug]] block cards. It only matches source markdown: glamour does not
+// pass the syntax through verbatim (see tokenizeEmbeds).
 var embedPattern = regexp.MustCompile(`!?\[\[(\w+):([^\]\n]+)\]\]`)
 
-// renderEmbedChips swaps embed syntax for compact styled chips after markdown
-// rendering. A chip split across wrapped lines stays raw — acceptable.
 // embedRef is one [[type:slug]] reference; msg refs carry an integer id.
 type embedRef struct {
 	kind string
@@ -42,10 +42,44 @@ func extractEmbeds(body string) []embedRef {
 	return refs
 }
 
-func renderEmbedChips(s string) string {
-	return embedPattern.ReplaceAllStringFunc(s, func(match string) string {
+// Embed chips are a two-phase substitution, mirroring the server's
+// EmbedPreprocessor: references become inert tokens before markdown rendering and
+// chips after. Matching the raw [[type:slug]] syntax in rendered output does not
+// work — glamour colours per token and splits on punctuation, so "[[" comes back
+// as "[" ESC-codes "[", and the pattern never fires. A marker of nothing but
+// letters and digits survives paragraphs, wrapping, lists, headings, and inline
+// code intact.
+var embedTokenPattern = regexp.MustCompile(`zzsalembedz(\d+)z`)
+
+func embedToken(i int) string { return fmt.Sprintf("zzsalembedz%dz", i) }
+
+// tokenizeEmbeds swaps every reference for a marker and returns them in the order
+// they appear (repeats included — each occurrence gets its own marker).
+func tokenizeEmbeds(s string) (string, []embedRef) {
+	var refs []embedRef
+	out := embedPattern.ReplaceAllStringFunc(s, func(match string) string {
 		groups := embedPattern.FindStringSubmatch(match)
-		return styleEmbedChip.Render("⟨" + groups[1] + ":" + groups[2] + "⟩")
+		refs = append(refs, embedRef{kind: groups[1], ref: strings.TrimSpace(groups[2])})
+		return embedToken(len(refs) - 1)
+	})
+	return out, refs
+}
+
+// restoreEmbedChips swaps the markers back for styled chips, hyperlinked where the
+// reference resolves to a web URL (see webLinks.embed). A marker with no matching
+// reference — a user who typed one literally — is left exactly as it was.
+func restoreEmbedChips(s string, refs []embedRef, links webLinks) string {
+	if len(refs) == 0 {
+		return s
+	}
+	return embedTokenPattern.ReplaceAllStringFunc(s, func(match string) string {
+		idx, err := strconv.Atoi(embedTokenPattern.FindStringSubmatch(match)[1])
+		if err != nil || idx < 0 || idx >= len(refs) {
+			return match
+		}
+		ref := refs[idx]
+		chip := styleEmbedChip.Render("⟨" + ref.kind + ":" + ref.ref + "⟩")
+		return osc8(links.embed(ref), chip)
 	})
 }
 
@@ -68,12 +102,13 @@ type msgBlock struct {
 
 type feedRenderer struct {
 	width    int
+	links    webLinks
 	markdown *glamour.TermRenderer
 	cache    map[string]string // key: id:updated_at → rendered body
 }
 
-func newFeedRenderer(width int) *feedRenderer {
-	r := &feedRenderer{cache: map[string]string{}}
+func newFeedRenderer(width int, links webLinks) *feedRenderer {
+	r := &feedRenderer{links: links, cache: map[string]string{}}
 	r.Resize(width)
 	return r
 }
@@ -99,8 +134,9 @@ func (r *feedRenderer) Resize(width int) {
 
 // Render lays out a channel's timeline and reports each message's line span.
 // selectedID > 0 marks that message with a gutter bar; unreadBeforeID > 0
-// draws the new-messages rule above that message.
-func (r *feedRenderer) Render(msgs []api.Message, selectedID, unreadBeforeID int64) (string, []msgBlock) {
+// draws the new-messages rule above that message. channel may be nil — it only
+// supplies the slug each message's timestamp hyperlinks to.
+func (r *feedRenderer) Render(msgs []api.Message, channel *api.Channel, selectedID, unreadBeforeID int64) (string, []msgBlock) {
 	var b strings.Builder
 	var blocks []msgBlock
 	line := 0
@@ -140,7 +176,7 @@ func (r *feedRenderer) Render(msgs []api.Message, selectedID, unreadBeforeID int
 		}
 		var segment strings.Builder
 		if needsHeader(prev, m) {
-			segment.WriteString(r.header(m))
+			segment.WriteString(r.header(m, channel))
 		}
 		segment.WriteString(r.body(m))
 		emit(segment.String(), m.ID)
@@ -163,7 +199,7 @@ func needsHeader(prev, m *api.Message) bool {
 	return m.CreatedAt.Sub(prev.CreatedAt) > groupWindow
 }
 
-func (r *feedRenderer) header(m *api.Message) string {
+func (r *feedRenderer) header(m *api.Message, channel *api.Channel) string {
 	nameStyle := styleSenderUser
 	if m.Sender.Type == "Agent" {
 		nameStyle = styleSenderAgent
@@ -173,6 +209,11 @@ func (r *feedRenderer) header(m *api.Message) string {
 		name = fmt.Sprintf("%s#%d", strings.ToLower(m.Sender.Type), m.Sender.ID)
 	}
 	ts := styleTimestamp.Render(m.CreatedAt.Local().Format("15:04"))
+	if channel != nil {
+		// The timestamp opens the message on the web — the same URL `y` copies.
+		// Wrapped after styling so the label keeps its rendered width.
+		ts = osc8(r.links.message(channel.Kind, channel.Slug, m.ID), ts)
+	}
 	return "\n" + nameStyle.Render(name) + "  " + ts + "\n"
 }
 
@@ -182,7 +223,7 @@ func (r *feedRenderer) body(m *api.Message) string {
 		return cached
 	}
 
-	text := strings.TrimRight(m.Body, "\n")
+	text, refs := tokenizeEmbeds(strings.TrimRight(m.Body, "\n"))
 	var out string
 	if r.markdown != nil {
 		if rendered, err := r.markdown.Render(text); err == nil {
@@ -195,7 +236,7 @@ func (r *feedRenderer) body(m *api.Message) string {
 	if m.EditedAt != nil {
 		out = strings.TrimRight(out, "\n") + " " + styleEditedTag.Render("(edited)") + "\n"
 	}
-	out = renderEmbedChips(out)
+	out = restoreEmbedChips(out, refs, r.links)
 	r.cache[key] = out
 	return out
 }

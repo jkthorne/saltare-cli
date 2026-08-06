@@ -48,7 +48,7 @@ func main() {
 	var err error
 	switch cmd {
 	case "":
-		err = runTUI()
+		err = runTUI(nil)
 	case "login":
 		err = runLogin(args)
 	case "logout":
@@ -80,6 +80,11 @@ func main() {
 	case "help", "--help", "-h":
 		usage()
 	default:
+		// A leading flag is TUI options ("sal --no-mouse"), not a subcommand.
+		if strings.HasPrefix(cmd, "-") {
+			err = runTUI(os.Args[1:])
+			break
+		}
 		fmt.Fprintf(os.Stderr, "sal: unknown command %q\n\n", cmd)
 		usage()
 		os.Exit(2)
@@ -95,6 +100,8 @@ func usage() {
 
 usage:
   sal                  launch the TUI
+       --no-mouse      disable clicks/scrolling (restores drag-to-select)
+       --mouse         force mouse support on for this run
   sal login            sign in and store a device session
        --server URL    (default http://localhost:3000)
        --email E       --workspace SLUG   --password-stdin
@@ -153,11 +160,27 @@ func interruptContext() (context.Context, context.CancelFunc) {
 
 // ── commands ────────────────────────────────────────────────────────────
 
-func runTUI() error {
+func runTUI(args []string) error {
+	fs := flag.NewFlagSet("sal", flag.ExitOnError)
+	noMouse := fs.Bool("no-mouse", false, "disable mouse clicks and scrolling (restores drag-to-select)")
+	mouse := fs.Bool("mouse", false, "enable mouse support for this run, overriding the config file")
+	if err := fs.Parse(args); err != nil {
+		return err
+	}
+
 	cfg, client, err := session()
 	if err != nil {
 		return err
 	}
+	// Flags win over the stored setting, in memory only — a one-off --no-mouse
+	// shouldn't rewrite the config file.
+	if *noMouse {
+		cfg.SetMouse(false)
+	}
+	if *mouse {
+		cfg.SetMouse(true)
+	}
+
 	ctx, cancel := interruptContext()
 	defer cancel()
 
@@ -168,7 +191,13 @@ func runTUI() error {
 		return authError(cfg, err)
 	}
 
-	program := tea.NewProgram(ui.NewModel(ctx, cfg, client), tea.WithAltScreen())
+	opts := []tea.ProgramOption{tea.WithAltScreen()}
+	if cfg.MouseEnabled() {
+		// Cell motion, not all motion: clicks, wheel, and drag-while-held, without
+		// an Update+View for every idle pointer move.
+		opts = append(opts, tea.WithMouseCellMotion())
+	}
+	program := tea.NewProgram(ui.NewModel(ctx, cfg, client), opts...)
 	final, err := program.Run()
 	if err != nil {
 		return err

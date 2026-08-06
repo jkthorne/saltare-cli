@@ -27,7 +27,23 @@ type Config struct {
 	UserID int64 `json:"user_id"`
 	// UserName of the signed-in user (empty on configs from older logins).
 	UserName string `json:"user_name,omitempty"`
+	// Mouse enables click and scroll support in the TUI. A pointer so an absent
+	// key means "unset" (default on) rather than false — turning mouse support
+	// off must be a decision someone made, not a side effect of an older config
+	// file. `sal --no-mouse` sets it in memory for one run without saving.
+	Mouse *bool `json:"mouse,omitempty"`
 }
+
+// MouseEnabled reports whether the TUI should track mouse events. On by default:
+// clicks and wheel scrolling are additive, and the cost — the terminal's own
+// drag-to-select stops working without a shift or option modifier — is
+// reversible from the command palette or `--no-mouse`.
+func (c *Config) MouseEnabled() bool { return c.Mouse == nil || *c.Mouse }
+
+// SetMouse records a resolved mouse decision without persisting it, so a
+// command-line override reaches the TUI through the same field the config file
+// uses instead of a parallel channel.
+func (c *Config) SetMouse(on bool) { c.Mouse = &on }
 
 // Dir returns ~/.config/saltare, creating it if needed. Deliberately not
 // os.UserConfigDir: on macOS that is ~/Library/Application Support, and a

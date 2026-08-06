@@ -57,7 +57,7 @@ go build -o sal ./cmd/sal
 
 | Command | What it does |
 |---|---|
-| `sal` | Launch the TUI |
+| `sal` | Launch the TUI (`--no-mouse` disables clicks/scrolling, `--mouse` forces them on) |
 | `sal login` | Sign in — mints a **user-bound device session** (`platform: cli`); flags: `--server`, `--email`, `--workspace`, `--password-stdin` |
 | `sal logout` | Revoke the device session server-side and clear local tokens |
 | `sal doctor` | Diagnose a broken session: config, token store + expiry, server reachability, who the server says you are, and config/server identity drift. Exits non-zero on any failure |
@@ -200,6 +200,52 @@ sending the first message bootstraps the 1:1 DM channel server-side and the
 agent replies live in the feed. Opening a channel marks it read; replying in a
 thread auto-joins you to it.
 
+## Mouse
+
+Clicks and scrolling work, and everything they do has a keyboard equivalent —
+mouse support is additive, so a terminal that doesn't report events (or an
+`ssh`/`screen` hop that swallows them) loses nothing.
+
+- **Sidebar**: click a channel, agent, or nav-rail row to open it. One click
+  activates, the same as `enter` — there is no double-click to learn.
+- **Feed**: click a message to select it (arc gutter bar), then all the
+  selection keys apply (`t` thread, `e` edit, `d` delete, `y` permalink).
+  Clicking the *already-selected* message follows its `[[embeds]]`, which is
+  what `enter` does.
+- **Composer**: click it to take focus back from the feed.
+- **Home**: click any dashboard row — an unread channel, a due task, the
+  notification count.
+- **Wheel**: scrolls the chat feed, the document reader, and the database grid.
+
+**The cost, and the escape hatch.** With mouse tracking on, the terminal stops
+handling click-drag text selection itself. Most terminals give it back if you
+hold **shift** while dragging (**option** on macOS Terminal and iTerm2). If you
+would rather not trade it at all:
+
+- `sal --no-mouse` for one run, or `"mouse": false` in
+  `~/.config/saltare/config.json` to make it permanent (`--mouse` forces it back
+  on for a run).
+- The palette (`ctrl+k` → "mouse: on/off") toggles it mid-session, for when you
+  just need to drag-select one stack trace.
+
+Not wired yet: the tasks/documents/files/database *list* panes, modal overlays
+(palette, search, inbox), the status bar, right-click menus, and drag.
+
+## Hyperlinks
+
+Independent of mouse tracking, sal emits OSC 8 terminal hyperlinks, which
+terminals that support them open on ctrl/cmd-click:
+
+- a message's **timestamp** → its web permalink (the same URL `y` copies)
+- the **channel title** → the channel on the web
+- a **task detail title** → the task page
+- `⟨task:…⟩`, `⟨channel:…⟩`, and `⟨agent:…⟩` **chips** → their web pages
+
+Chips for docs, uploads, databases, and `[[msg:id]]` stay unlinked on purpose —
+those live at data-tree paths sal doesn't carry, and a dead link is worse than
+plain text. Terminals without OSC 8 support discard the sequence and print the
+label bare; nothing needs configuring either way.
+
 ## How it talks to the server
 
 - **Auth**: `POST /api/v1/auth/token` with `platform: "cli"` → an agentless
@@ -256,6 +302,10 @@ bind-key -n 'C-j' if-shell "$is_vim_or_sal" 'send-keys C-j' 'select-pane -D'
 bind-key -n 'C-k' if-shell "$is_vim_or_sal" 'send-keys C-k' 'select-pane -U'
 bind-key -n 'C-l' if-shell "$is_vim_or_sal" 'send-keys C-l' 'select-pane -R'
 ```
+
+If your tmux mouse configuration fights sal's for clicks or selection, `sal
+--no-mouse` (or `"mouse": false` in the config) hands the pointer back to tmux
+without giving up any functionality — every mouse action has a key.
 
 Verify with `tmux list-keys -T root | grep C-k` — the binding must contain
 `sal`.
