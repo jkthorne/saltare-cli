@@ -6,8 +6,8 @@ import (
 	"os"
 	"time"
 
-	"github.com/jkthorne/saltare/cli/internal/agenda"
-	"github.com/jkthorne/saltare/cli/internal/api"
+	"github.com/jkthorne/saltare-cli/internal/agenda"
+	"github.com/jkthorne/saltare-cli/internal/api"
 )
 
 // runAgenda prints your next N days of tasks grouped by day — the scriptable

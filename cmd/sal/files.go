@@ -6,9 +6,9 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/jkthorne/saltare/cli/internal/api"
-	"github.com/jkthorne/saltare/cli/internal/config"
-	"github.com/jkthorne/saltare/cli/internal/tablefmt"
+	"github.com/jkthorne/saltare-cli/internal/api"
+	"github.com/jkthorne/saltare-cli/internal/config"
+	"github.com/jkthorne/saltare-cli/internal/tablefmt"
 )
 
 func printJSON(v any) error {

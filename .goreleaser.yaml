@@ -1,6 +1,5 @@
-# goreleaser config for sal. Run from cli/ (the release workflow sets
-# working-directory). Local dry run:
-#   cd cli && goreleaser release --snapshot --clean
+# goreleaser config for sal. Local dry run:
+#   goreleaser release --snapshot --clean
 version: 2
 
 project_name: sal
@@ -34,8 +33,8 @@ changelog:
   use: github
   filters:
     include:
-      - "^feat\\(cli\\)"
-      - "^fix\\(cli\\)"
+      - "^feat"
+      - "^fix"
 
 # Homebrew tap publishing — intentionally disabled while this repo is
 # PRIVATE: goreleaser writes formulas with public release-asset URLs, which
@@ -52,7 +51,7 @@ changelog:
 #       name: homebrew-tap
 #       token: "{{ .Env.HOMEBREW_TAP_TOKEN }}"
 #     directory: Formula
-#     homepage: https://github.com/jkthorne/saltare
+#     homepage: https://github.com/jkthorne/saltare-cli
 #     description: "Saltare in your terminal — chat, tasks, agents, and Claude"
 #     license: MIT
 #     test: |

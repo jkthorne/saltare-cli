@@ -8,8 +8,8 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/jkthorne/saltare/cli/internal/api"
-	"github.com/jkthorne/saltare/cli/internal/tablefmt"
+	"github.com/jkthorne/saltare-cli/internal/api"
+	"github.com/jkthorne/saltare-cli/internal/tablefmt"
 )
 
 // attachView is the composer's attach prompt (ctrl+y): path-looking input

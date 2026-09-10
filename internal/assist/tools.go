@@ -5,7 +5,7 @@
 // CLI sessions are deliberately user-bound, hence this path.
 package assist
 
-import "github.com/jkthorne/saltare/cli/internal/api"
+import "github.com/jkthorne/saltare-cli/internal/api"
 
 func obj(props map[string]any, required ...string) map[string]any {
 	schema := map[string]any{"type": "object", "properties": props}

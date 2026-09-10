@@ -10,7 +10,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jkthorne/saltare/cli/internal/config"
+	"github.com/jkthorne/saltare-cli/internal/config"
 )
 
 // TestRefreshOn401RetriesOnce: a stale access token gets one refresh rotation

@@ -6,8 +6,8 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/jkthorne/saltare/cli/internal/api"
-	"github.com/jkthorne/saltare/cli/internal/config"
+	"github.com/jkthorne/saltare-cli/internal/api"
+	"github.com/jkthorne/saltare-cli/internal/config"
 )
 
 // testModel is a model already dropped into chat (the pre-home default most

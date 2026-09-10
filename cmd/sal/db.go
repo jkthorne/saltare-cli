@@ -7,8 +7,8 @@ import (
 	"os"
 	"strings"
 
-	"github.com/jkthorne/saltare/cli/internal/api"
-	"github.com/jkthorne/saltare/cli/internal/tablefmt"
+	"github.com/jkthorne/saltare-cli/internal/api"
+	"github.com/jkthorne/saltare-cli/internal/tablefmt"
 )
 
 func runDB(args []string) error {

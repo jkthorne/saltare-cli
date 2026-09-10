@@ -7,7 +7,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/jkthorne/saltare/cli/internal/api"
+	"github.com/jkthorne/saltare-cli/internal/api"
 )
 
 const paletteMaxRows = 10

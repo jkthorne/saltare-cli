@@ -10,7 +10,7 @@ import (
 	"github.com/charmbracelet/glamour"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/jkthorne/saltare/cli/internal/api"
+	"github.com/jkthorne/saltare-cli/internal/api"
 )
 
 // embedPattern matches Saltare cross-references — [[type:slug]] inline chips and

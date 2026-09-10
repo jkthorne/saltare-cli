@@ -11,8 +11,8 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jkthorne/saltare/cli/internal/api"
-	"github.com/jkthorne/saltare/cli/internal/config"
+	"github.com/jkthorne/saltare-cli/internal/api"
+	"github.com/jkthorne/saltare-cli/internal/config"
 )
 
 // runDoctor walks the boot chain in order — config, tokens, server, session,

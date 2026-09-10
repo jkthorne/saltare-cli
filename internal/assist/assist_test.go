@@ -8,8 +8,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jkthorne/saltare/cli/internal/api"
-	"github.com/jkthorne/saltare/cli/internal/config"
+	"github.com/jkthorne/saltare-cli/internal/api"
+	"github.com/jkthorne/saltare-cli/internal/config"
 )
 
 func testClient(t *testing.T, srv *httptest.Server) *api.Client {

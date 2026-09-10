@@ -1,0 +1,6 @@
+# Built binary and goreleaser output
+/sal
+/dist/
+
+# Editor scratch
+*.swp

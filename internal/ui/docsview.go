@@ -7,7 +7,7 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/bubbles/viewport"
 
-	"github.com/jkthorne/saltare/cli/internal/api"
+	"github.com/jkthorne/saltare-cli/internal/api"
 )
 
 // docsView is the ctrl+o mode: a document browser with a glamour reader

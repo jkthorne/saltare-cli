@@ -8,8 +8,8 @@ import (
 	"github.com/charmbracelet/bubbles/textinput"
 	tea "github.com/charmbracelet/bubbletea"
 
-	"github.com/jkthorne/saltare/cli/internal/agenda"
-	"github.com/jkthorne/saltare/cli/internal/api"
+	"github.com/jkthorne/saltare-cli/internal/agenda"
+	"github.com/jkthorne/saltare-cli/internal/api"
 )
 
 // tasksView is the full-pane task list (replaces the feed while active).

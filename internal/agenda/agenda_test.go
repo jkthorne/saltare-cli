@@ -4,7 +4,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jkthorne/saltare/cli/internal/api"
+	"github.com/jkthorne/saltare-cli/internal/api"
 )
 
 func str(s string) *string { return &s }

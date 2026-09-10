@@ -40,14 +40,13 @@ brew install sal
 
 Or grab a `sal_*_<os>_<arch>.tar.gz` from a GitHub release. Releases are cut
 by pushing a `v*` tag (`.github/workflows/release.yml` runs goreleaser;
-config in `cli/.goreleaser.yaml`). After tagging, bump `tag`/`version` in the
+config in `.goreleaser.yaml`). After tagging, bump `tag`/`version` in the
 tap's `Formula/sal.rb`. When this repo goes public, switch the tap to
 goreleaser's generated binary formulas (block ready in `.goreleaser.yaml`).
 
 From source:
 
 ```sh
-cd cli
 go build -o sal ./cmd/sal
 ./sal login --server https://your-saltare.example   # or http://localhost:3000
 ./sal                                               # launch the TUI
@@ -311,5 +310,32 @@ Verify with `tmux list-keys -T root | grep C-k` — the binding must contain
 `sal`.
 
 The TUI is dark-terminal-only for now, matching the NieR HUD design system.
-Tested against the dev server: `bin/rails server`, then
-`sal login --server http://localhost:3000`.
+Tested against the dev server: from a `saltare` checkout `bin/rails server`,
+then `sal login --server http://localhost:3000`.
+
+## The API contract
+
+sal decodes `/api/v1` by hand, and so do saltare-ios (Swift) and saltare-sdk
+(Kotlin). Nothing generates any of them, so a renamed server key is a silent
+zero value here rather than a build error.
+
+`internal/api/testdata/api_golden/*.json` are copies of the server's golden
+payloads, one per serializer, and `internal/api/golden_test.go` asserts that
+every field these structs declare still has a key in them. Server keys sal
+ignores are logged, not failed — a client that decodes less than the server
+sends is working as intended.
+
+Refresh the copies when the server's serializers change:
+
+```sh
+script/sync-goldens.sh          # from a sibling ../saltare checkout
+```
+
+The server regenerates its side with:
+
+```sh
+WRITE_GOLDEN=1 bin/rails test test/serializers/api/v1/golden_payloads_test.rb
+```
+
+The full contract — auth doors, scope grants, error codes — is
+`docs/native-clients.md` in the saltare repo.

@@ -5,8 +5,8 @@ import (
 	"sort"
 	"strings"
 
-	"github.com/jkthorne/saltare/cli/internal/api"
-	"github.com/jkthorne/saltare/cli/internal/assist"
+	"github.com/jkthorne/saltare-cli/internal/api"
+	"github.com/jkthorne/saltare-cli/internal/assist"
 )
 
 // assistDefaultModel is served by the inference proxy on every plan tier and

@@ -5,7 +5,7 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jkthorne/saltare/cli/internal/api"
+	"github.com/jkthorne/saltare-cli/internal/api"
 )
 
 func twoChannelModel(t *testing.T) Model {

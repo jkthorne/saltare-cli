@@ -3,7 +3,7 @@ package ui
 import (
 	"strings"
 
-	"github.com/jkthorne/saltare/cli/internal/api"
+	"github.com/jkthorne/saltare-cli/internal/api"
 )
 
 // notifyView is the ctrl+n overlay: the caller's unread notifications.

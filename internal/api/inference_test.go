@@ -9,7 +9,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jkthorne/saltare/cli/internal/config"
+	"github.com/jkthorne/saltare-cli/internal/config"
 )
 
 func sseServer(t *testing.T, events []string, wantModel string) *httptest.Server {

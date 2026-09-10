@@ -3,7 +3,7 @@ package tablefmt
 import (
 	"testing"
 
-	"github.com/jkthorne/saltare/cli/internal/api"
+	"github.com/jkthorne/saltare-cli/internal/api"
 )
 
 func strPtr(s string) *string { return &s }

@@ -27,11 +27,11 @@ import (
 	"github.com/google/uuid"
 	"golang.org/x/term"
 
-	"github.com/jkthorne/saltare/cli/internal/api"
-	"github.com/jkthorne/saltare/cli/internal/assist"
-	"github.com/jkthorne/saltare/cli/internal/cable"
-	"github.com/jkthorne/saltare/cli/internal/config"
-	"github.com/jkthorne/saltare/cli/internal/ui"
+	"github.com/jkthorne/saltare-cli/internal/api"
+	"github.com/jkthorne/saltare-cli/internal/assist"
+	"github.com/jkthorne/saltare-cli/internal/cable"
+	"github.com/jkthorne/saltare-cli/internal/config"
+	"github.com/jkthorne/saltare-cli/internal/ui"
 )
 
 // version is stamped by goreleaser via -ldflags "-X main.version=…".

@@ -1,4 +1,4 @@
-module github.com/jkthorne/saltare/cli
+module github.com/jkthorne/saltare-cli
 
 go 1.26.5
 

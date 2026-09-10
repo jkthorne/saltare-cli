@@ -6,8 +6,8 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jkthorne/saltare/cli/internal/api"
-	"github.com/jkthorne/saltare/cli/internal/config"
+	"github.com/jkthorne/saltare-cli/internal/api"
+	"github.com/jkthorne/saltare-cli/internal/config"
 )
 
 var pickChoices = []api.WorkspaceChoice{

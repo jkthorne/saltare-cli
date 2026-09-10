@@ -11,7 +11,7 @@ import (
 	"strings"
 	"testing"
 
-	"github.com/jkthorne/saltare/cli/internal/config"
+	"github.com/jkthorne/saltare-cli/internal/config"
 )
 
 // The 401-refresh retry must replay the multipart body — each attempt

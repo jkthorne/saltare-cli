@@ -5,8 +5,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jkthorne/saltare/cli/internal/api"
-	"github.com/jkthorne/saltare/cli/internal/store"
+	"github.com/jkthorne/saltare-cli/internal/api"
+	"github.com/jkthorne/saltare-cli/internal/store"
 )
 
 func navIndex(items []sidebarItem, key string) int {

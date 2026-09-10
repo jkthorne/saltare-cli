@@ -6,8 +6,8 @@ package store
 import (
 	"sort"
 
-	"github.com/jkthorne/saltare/cli/internal/api"
-	"github.com/jkthorne/saltare/cli/internal/cable"
+	"github.com/jkthorne/saltare-cli/internal/api"
+	"github.com/jkthorne/saltare-cli/internal/cable"
 )
 
 type Store struct {

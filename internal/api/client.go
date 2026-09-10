@@ -18,7 +18,7 @@ import (
 	"sync"
 	"time"
 
-	"github.com/jkthorne/saltare/cli/internal/config"
+	"github.com/jkthorne/saltare-cli/internal/config"
 )
 
 // ErrAuthExpired means both the access and refresh tokens are dead —

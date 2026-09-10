@@ -8,7 +8,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/jkthorne/saltare/cli/internal/api"
+	"github.com/jkthorne/saltare-cli/internal/api"
 )
 
 // WindowDays is the default agenda span, today inclusive.

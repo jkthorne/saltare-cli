@@ -4,8 +4,8 @@ import (
 	"testing"
 	"time"
 
-	"github.com/jkthorne/saltare/cli/internal/api"
-	"github.com/jkthorne/saltare/cli/internal/cable"
+	"github.com/jkthorne/saltare-cli/internal/api"
+	"github.com/jkthorne/saltare-cli/internal/cable"
 )
 
 func msg(id int64, channelID int64, at time.Time) api.Message {

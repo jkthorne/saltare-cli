@@ -17,13 +17,13 @@ import (
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
 
-	"github.com/jkthorne/saltare/cli/internal/agenda"
-	"github.com/jkthorne/saltare/cli/internal/api"
-	"github.com/jkthorne/saltare/cli/internal/assist"
-	"github.com/jkthorne/saltare/cli/internal/cable"
-	"github.com/jkthorne/saltare/cli/internal/config"
-	"github.com/jkthorne/saltare/cli/internal/store"
-	"github.com/jkthorne/saltare/cli/internal/tablefmt"
+	"github.com/jkthorne/saltare-cli/internal/agenda"
+	"github.com/jkthorne/saltare-cli/internal/api"
+	"github.com/jkthorne/saltare-cli/internal/assist"
+	"github.com/jkthorne/saltare-cli/internal/cable"
+	"github.com/jkthorne/saltare-cli/internal/config"
+	"github.com/jkthorne/saltare-cli/internal/store"
+	"github.com/jkthorne/saltare-cli/internal/tablefmt"
 )
 
 type connState int

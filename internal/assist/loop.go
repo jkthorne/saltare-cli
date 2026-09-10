@@ -3,7 +3,7 @@ package assist
 import (
 	"context"
 
-	"github.com/jkthorne/saltare/cli/internal/api"
+	"github.com/jkthorne/saltare-cli/internal/api"
 )
 
 // maxToolIterations bounds one user turn: after this many tool rounds the

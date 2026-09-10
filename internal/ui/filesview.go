@@ -7,8 +7,8 @@ import (
 
 	"github.com/charmbracelet/bubbles/textinput"
 
-	"github.com/jkthorne/saltare/cli/internal/api"
-	"github.com/jkthorne/saltare/cli/internal/tablefmt"
+	"github.com/jkthorne/saltare-cli/internal/api"
+	"github.com/jkthorne/saltare-cli/internal/tablefmt"
 )
 
 // filesView is the workspace file cabinet (palette → files): browse

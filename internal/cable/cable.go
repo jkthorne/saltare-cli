@@ -18,7 +18,7 @@ import (
 
 	"github.com/coder/websocket"
 
-	"github.com/jkthorne/saltare/cli/internal/api"
+	"github.com/jkthorne/saltare-cli/internal/api"
 )
 
 type EventType string
