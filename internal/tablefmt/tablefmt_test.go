@@ -73,3 +73,43 @@ func TestHumanSize(t *testing.T) {
 		}
 	}
 }
+
+func TestHeadingsUseNamesAndRecordsKeepKeys(t *testing.T) {
+	columns := []api.DBColumn{
+		{Key: "name", Name: "Company", Type: "text"},
+		{Key: "deal_size", Name: "Deal Size", Type: "number"},
+		{Key: "legacy", Type: "text"}, // no name in the schema
+	}
+	rows := []api.DBRow{{ID: 1, Data: map[string]any{"name": "Acme"}, Body: strPtr("notes")}}
+
+	// The TUI reads headings; a person wants the label.
+	want := []string{"id", "Company", "Deal Size", "legacy", "body"}
+	got := Headings(columns, rows)
+	if len(got) != len(want) {
+		t.Fatalf("headings: %v", got)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("headings[%d] = %q, want %q (%v)", i, got[i], want[i], got)
+		}
+	}
+
+	// Scripts read Records; its header must stay the stable key, or a
+	// `sal db rows --csv` consumer keyed on "deal_size" breaks.
+	wantKeys := []string{"id", "name", "deal_size", "legacy", "body"}
+	header := Records(columns, rows)[0]
+	for i := range wantKeys {
+		if header[i] != wantKeys[i] {
+			t.Fatalf("records header[%d] = %q, want %q (%v)", i, header[i], wantKeys[i], header)
+		}
+	}
+}
+
+func TestColumnLabelFallsBackToKey(t *testing.T) {
+	if got := (api.DBColumn{Key: "deal_size", Name: "Deal Size"}).Label(); got != "Deal Size" {
+		t.Fatalf("got %q", got)
+	}
+	if got := (api.DBColumn{Key: "deal_size"}).Label(); got != "deal_size" {
+		t.Fatalf("nameless column must fall back to its key, got %q", got)
+	}
+}

@@ -91,9 +91,9 @@ func dbGridModel(t *testing.T) Model {
 	m.view = viewDB
 	m.db.level = dbLevelGrid
 	db := api.Database{ID: 1, Slug: "crm", Name: "CRM", RowsCount: 2, Schema: &api.DBSchema{Columns: []api.DBColumn{
-		{Key: "name", Type: "text"},
-		{Key: "deal_size", Type: "number"},
-		{Key: "score", Type: "formula"},
+		{Key: "name", Name: "Company", Type: "text"},
+		{Key: "deal_size", Name: "Deal Size", Type: "number"},
+		{Key: "score", Name: "Score", Type: "formula"},
 	}}}
 	m.db.database = &db
 	m.db.rows = []api.DBRow{
@@ -208,5 +208,28 @@ func TestSearchResultsIncludeUploads(t *testing.T) {
 	})
 	if row, ok := sv.selected(); !ok || row.upload == nil || row.upload.Slug != "q4-report" {
 		t.Fatalf("uploads must be selectable rows, got %+v", sv.rows)
+	}
+}
+
+func TestDBGridAndDetailShowColumnNames(t *testing.T) {
+	m := dbGridModel(t)
+
+	grid := m.db.grid.View()
+	if !strings.Contains(grid, "Deal Size") {
+		t.Fatalf("grid must head columns with their names:\n%s", grid)
+	}
+	if strings.Contains(grid, "deal_size") {
+		t.Fatalf("the key is the identifier, not the heading:\n%s", grid)
+	}
+
+	m.db.level = dbLevelDetail
+	detail := m.db.renderDetail(80, 24)
+	if !strings.Contains(detail, "Deal Size: 50000") {
+		t.Fatalf("row detail must label fields by name:\n%s", detail)
+	}
+
+	// The key still addresses the data — only the label changed.
+	if m.db.columns()[1].Key != "deal_size" {
+		t.Fatal("column keys must be untouched")
 	}
 }

@@ -6,6 +6,7 @@ import (
 
 	"github.com/charmbracelet/bubbles/table"
 	"github.com/charmbracelet/bubbles/textinput"
+	"github.com/charmbracelet/lipgloss"
 
 	"github.com/jkthorne/saltare-cli/internal/api"
 	"github.com/jkthorne/saltare-cli/internal/tablefmt"
@@ -91,15 +92,18 @@ func (d *dbView) currentRow() *api.DBRow {
 // join it. Cursor position survives rebuilds.
 func (d *dbView) buildGrid() {
 	records := tablefmt.Records(d.columns(), d.rows)
-	header := records[0]
+	// Grid chrome is read by a person, so head it with the columns' human
+	// names; the records below keep their key-addressed cells.
+	header := tablefmt.Headings(d.columns(), d.rows)
 
+	// lipgloss.Width, not len: a heading is a human name now, and a byte
+	// count mismeasures anything outside ASCII.
 	widths := make([]int, len(header))
 	for c := range header {
-		w := len(header[c])
+		w := lipgloss.Width(header[c])
 		for _, record := range records[1:] {
-			cell := tablefmt.Flatten(record[c])
-			if len(cell) > w {
-				w = len(cell)
+			if cw := lipgloss.Width(tablefmt.Flatten(record[c])); cw > w {
+				w = cw
 			}
 		}
 		widths[c] = clampInt(w, 6, 32)
@@ -228,12 +232,12 @@ func (d *dbView) renderDetail(width, height int) string {
 	rows = append(rows, stylePickerTitle.Render(fmt.Sprintf("▦ %s · row %d", d.database.Name, row.ID)), "")
 	for i, col := range d.columns() {
 		value := tablefmt.RenderCell(row.Data[col.Key])
-		line := col.Key + ": " + value
+		line := col.Label() + ": " + value
 		if col.Type == "formula" {
 			line += styleFeedTopic.Render("  (computed)")
 		}
 		if d.editOpen && d.editKey == col.Key {
-			line = col.Key + ": " + d.input.View()
+			line = col.Label() + ": " + d.input.View()
 		}
 		if i == d.fieldSel {
 			rows = append(rows, stylePickerSel.Render("▸ "+truncate(line, width-6)))

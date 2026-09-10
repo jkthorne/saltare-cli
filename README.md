@@ -160,7 +160,9 @@ typed path (`~` works), `x` deletes behind a confirm, `y` copies the
 embed. **Databases**: pick a table, browse it as a real grid (`h/l` pans
 columns, `o` loads more rows), `enter` a row for its detail — and `enter`
 a field to **edit the cell in place** (the server types your input per
-column; formula columns are read-only). Search results and
+column; formula columns are read-only). Grid headings and detail labels
+read the columns' human names; `sal db rows` heads its TSV and CSV with
+the column *keys*, because that header is what scripts parse. Search results and
 `[[upload:…]]`/`[[db:…]]` embeds jump straight into both views.
 
 From scripts, the same power: `sal files put deploy.log` from any server

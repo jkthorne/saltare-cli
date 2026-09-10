@@ -14,23 +14,9 @@ import (
 // verbatim and arrays comma-joined; formula columns never appear in row
 // data, so their cells stay empty.
 func Records(columns []api.DBColumn, rows []api.DBRow) [][]string {
-	hasBody := false
-	for _, row := range rows {
-		if row.Body != nil && *row.Body != "" {
-			hasBody = true
-			break
-		}
-	}
+	hasBody := hasBodyColumn(rows)
 
-	header := []string{"id"}
-	for _, col := range columns {
-		header = append(header, col.Key)
-	}
-	if hasBody {
-		header = append(header, "body")
-	}
-
-	records := [][]string{header}
+	records := [][]string{headerRow(columns, rows, keyOf)}
 	for _, row := range rows {
 		record := []string{fmt.Sprintf("%d", row.ID)}
 		for _, col := range columns {
@@ -46,6 +32,38 @@ func Records(columns []api.DBColumn, rows []api.DBRow) [][]string {
 		records = append(records, record)
 	}
 	return records
+}
+
+// Headings is Records' header row with each column's human name in place of
+// its key. Only the TUI uses it — a person reading a grid wants "Deal Size",
+// while the TSV and CSV `sal db rows` prints are parsed by scripts, so their
+// header has to stay the stable key.
+func Headings(columns []api.DBColumn, rows []api.DBRow) []string {
+	return headerRow(columns, rows, api.DBColumn.Label)
+}
+
+func keyOf(col api.DBColumn) string { return col.Key }
+
+// headerRow is the shared layout: "id", one heading per column, then "body"
+// when any row carries one. Only the vocabulary differs between callers.
+func headerRow(columns []api.DBColumn, rows []api.DBRow, heading func(api.DBColumn) string) []string {
+	header := []string{"id"}
+	for _, col := range columns {
+		header = append(header, heading(col))
+	}
+	if hasBodyColumn(rows) {
+		header = append(header, "body")
+	}
+	return header
+}
+
+func hasBodyColumn(rows []api.DBRow) bool {
+	for _, row := range rows {
+		if row.Body != nil && *row.Body != "" {
+			return true
+		}
+	}
+	return false
 }
 
 // RenderCell turns a raw JSON cell value into display text.

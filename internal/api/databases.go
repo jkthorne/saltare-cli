@@ -37,6 +37,16 @@ type DBColumn struct {
 	Options []string `json:"options"`
 }
 
+// Label is the column's display text: its human name, falling back to the key
+// for a schema written without one. Keys stay the identifier — `sal db rows`
+// heads its TSV and CSV with them because scripts parse that header.
+func (c DBColumn) Label() string {
+	if c.Name != "" {
+		return c.Name
+	}
+	return c.Key
+}
+
 // DBRow mirrors Api::V1::RowSerializer. Data is the raw cell hash keyed by
 // column key; formula columns are computed on read and never appear.
 type DBRow struct {
