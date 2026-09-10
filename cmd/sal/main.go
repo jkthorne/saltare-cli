@@ -35,7 +35,7 @@ import (
 )
 
 // version is stamped by goreleaser via -ldflags "-X main.version=…".
-var version = "0.2.0-dev"
+var version = "0.3.0-dev"
 
 func main() {
 	args := os.Args[1:]
