@@ -1,0 +1,22 @@
+{
+  "id": 237581901,
+  "slug": "general",
+  "name": "General",
+  "display_name": "General",
+  "dm_pair_key": null,
+  "description": null,
+  "kind": "public_channel",
+  "archived": false,
+  "messages_count": 2,
+  "members_count": 0,
+  "creator_id": 980190962,
+  "host_type": null,
+  "host_id": null,
+  "parent_channel_id": null,
+  "root_message_id": null,
+  "member": true,
+  "last_read_at": null,
+  "unread_count": 2,
+  "created_at": "2026-09-10T07:33:47.044Z",
+  "updated_at": "2026-09-10T07:33:47.044Z"
+}

@@ -1,0 +1,18 @@
+{
+  "id": 4540252,
+  "action": "mentioned",
+  "read_at": null,
+  "created_at": "2026-09-10T07:33:47.065Z",
+  "actor": {
+    "id": 298486374,
+    "name": "Bob"
+  },
+  "notifiable": {
+    "type": "Task",
+    "id": 144789364
+  },
+  "task": {
+    "slug": "fix-login-bug-a3f2c1",
+    "title": "Fix login bug"
+  }
+}

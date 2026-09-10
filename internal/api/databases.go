@@ -28,9 +28,12 @@ type DBSchema struct {
 }
 
 type DBColumn struct {
-	Key     string   `json:"key"`
-	Type    string   `json:"type"`
-	Label   *string  `json:"label"`
+	Key  string `json:"key"`
+	Type string `json:"type"`
+	// Name is the column's human label. The schema jsonb calls it `name`;
+	// this struct read `label` until the golden test caught it, which is why
+	// the grid has always headed columns with their keys.
+	Name    string   `json:"name"`
 	Options []string `json:"options"`
 }
 

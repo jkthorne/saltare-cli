@@ -1,0 +1,15 @@
+{
+  "id": 907840668,
+  "data_table_id": 859837811,
+  "position": 0,
+  "data": {
+    "name": "Jane Smith",
+    "email": "jane@example.com",
+    "status": "Active",
+    "company": "Acme"
+  },
+  "body": null,
+  "last_modified_by": null,
+  "created_at": "2026-09-10T07:33:47.048Z",
+  "updated_at": "2026-09-10T07:33:47.048Z"
+}

@@ -1,0 +1,37 @@
+{
+  "id": 859837811,
+  "slug": "contacts",
+  "name": "Contacts",
+  "rows_count": 0,
+  "created_at": "2026-09-10T07:33:47.051Z",
+  "updated_at": "2026-09-10T07:33:47.051Z",
+  "schema": {
+    "columns": [
+      {
+        "key": "name",
+        "name": "Name",
+        "type": "text"
+      },
+      {
+        "key": "email",
+        "name": "Email",
+        "type": "text"
+      },
+      {
+        "key": "company",
+        "name": "Company",
+        "type": "text"
+      },
+      {
+        "key": "status",
+        "name": "Status",
+        "type": "select",
+        "options": [
+          "Active",
+          "Inactive",
+          "Lead"
+        ]
+      }
+    ]
+  }
+}

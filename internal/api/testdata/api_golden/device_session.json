@@ -1,0 +1,55 @@
+{
+  "token_type": "Bearer",
+  "access_token": "sk_sal_example",
+  "refresh_token": "rt_sal_example",
+  "expires_at": "2026-10-10T07:33:47.415Z",
+  "refresh_expires_at": "2027-03-09T07:33:47.417Z",
+  "scopes": [
+    "tasks:read",
+    "messages:read",
+    "messages:write",
+    "channels:read",
+    "documents:read",
+    "databases:read",
+    "uploads:read",
+    "beacons:read",
+    "agents:read",
+    "agents:trigger",
+    "mcp:tools:read",
+    "mcp:resources:read",
+    "inference:run",
+    "tasks:write",
+    "documents:write",
+    "uploads:write",
+    "notifications:read"
+  ],
+  "device": {
+    "id": "golden-device",
+    "name": "Golden Device",
+    "platform": "android",
+    "app": "manda"
+  },
+  "workspace": {
+    "id": 980190962,
+    "slug": "acme-corp",
+    "name": "Acme Corp",
+    "plan": "pro"
+  },
+  "user": {
+    "id": 980190962,
+    "email": "alice@example.com",
+    "name": "Alice",
+    "email_verified": true
+  },
+  "agent": {
+    "id": 1011258273,
+    "slug": "golden-device-ba8bc0",
+    "name": "Golden Device",
+    "description": "Workspace agent bound to a android device.",
+    "status": "active",
+    "avatar_color": "silver",
+    "model": null,
+    "created_at": "2026-09-10T07:33:47.414Z",
+    "updated_at": "2026-09-10T07:33:47.414Z"
+  }
+}
