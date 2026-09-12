@@ -132,6 +132,46 @@ func TestGoldenPayloadsCoverEveryDeclaredField(t *testing.T) {
 	}
 }
 
+// goldenCases is hand-written, and script/sync-goldens.sh copies whatever the
+// server has. Without this, a serializer added server-side lands in testdata
+// and is checked by nothing — the silent-drift hole the golden test exists to
+// close, reopened one directory up. A payload sal genuinely does not decode is
+// still fine; it just has to say so out loud, with an `unmapped` case.
+func TestEveryGoldenFileHasACase(t *testing.T) {
+	files, err := filepath.Glob(filepath.Join("testdata", "api_golden", "*.json"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(files) == 0 {
+		t.Fatal("no goldens in testdata/api_golden — did script/sync-goldens.sh run?")
+	}
+
+	cased := make(map[string]bool, len(goldenCases()))
+	for _, tc := range goldenCases() {
+		cased[tc.name] = true
+	}
+
+	onDisk := make(map[string]bool, len(files))
+	for _, file := range files {
+		name := strings.TrimSuffix(filepath.Base(file), ".json")
+		onDisk[name] = true
+		if !cased[name] {
+			t.Errorf("testdata/api_golden/%s.json has no case in goldenCases() — the "+
+				"server grew a serializer and nothing here checks it. Add a case with "+
+				"the Go type that decodes it, or an `unmapped` note saying why sal "+
+				"does not.", name)
+		}
+	}
+
+	for name := range cased {
+		if !onDisk[name] {
+			t.Errorf("goldenCases() names %q but testdata/api_golden/%s.json is gone — "+
+				"the server dropped that serializer, or a sync went wrong.\n%s",
+				name, name, driftHint)
+		}
+	}
+}
+
 // A spot-check that the goldens carry real values, not just shape — the same
 // pair the server's own golden test asserts.
 func TestGoldenPayloadsCarryValues(t *testing.T) {
