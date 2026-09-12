@@ -29,6 +29,11 @@ const (
 	EventMessageCreated EventType = "message_created"
 	EventMessageUpdated EventType = "message_updated"
 	EventMessageDeleted EventType = "message_destroyed"
+	// EventSubscriptionRejected means the server refused a channel — its
+	// policy-gated visibility was revoked, or it was deleted. The socket stays
+	// up and every other channel keeps streaming; only this one is dead, and
+	// nothing but this event says so.
+	EventSubscriptionRejected EventType = "subscription_rejected"
 )
 
 type Event struct {
@@ -95,6 +100,29 @@ func (c *Client) Subscribe(channelID int64) {
 	case c.notify <- channelID:
 	default: // full buffer: the reconnect resubscribe path covers it
 	}
+}
+
+// forget drops a channel from the subscription set so reconnects stop asking
+// for one the server has already refused.
+func (c *Client) forget(channelID int64) {
+	if channelID == 0 {
+		return
+	}
+	c.mu.Lock()
+	defer c.mu.Unlock()
+	delete(c.ids, channelID)
+}
+
+// identChannelID pulls the channel id out of a subscription identifier, which
+// arrives as a JSON-encoded string. Zero when it cannot be read.
+func identChannelID(identifier string) int64 {
+	var ident struct {
+		ChannelID int64 `json:"channel_id"`
+	}
+	if json.Unmarshal([]byte(identifier), &ident) != nil {
+		return 0
+	}
+	return ident.ChannelID
 }
 
 func (c *Client) snapshotIDs() []int64 {
@@ -197,9 +225,17 @@ func (c *Client) connectOnce(ctx context.Context, backoff *time.Duration) error 
 			}
 			*backoff = time.Second // healthy connection resets the retry clock
 			emit(ctx, c.events, Event{Type: EventConnected})
-		case "ping", "confirm_subscription", "reject_subscription":
-			// pings feed the read deadline; rejections mean visibility was
-			// revoked mid-session — the REST layer will surface that.
+		case "ping", "confirm_subscription":
+			// pings feed the read deadline; confirmations need no action.
+		case "reject_subscription":
+			// Visibility was revoked mid-session (or the channel is gone).
+			// Silently ignoring this leaves a channel that looks live and
+			// receives nothing, so hand it to the consumer to surface.
+			c.forget(identChannelID(frame.Identifier))
+			emit(ctx, c.events, Event{
+				Type:      EventSubscriptionRejected,
+				ChannelID: identChannelID(frame.Identifier),
+			})
 		case "disconnect":
 			return fmt.Errorf("server sent disconnect")
 		default:

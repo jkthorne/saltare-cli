@@ -3006,6 +3006,14 @@ func (m Model) handleCable(ev cable.Event) (tea.Model, tea.Cmd) {
 		}
 	case cable.EventDisconnected:
 		m.conn = connRetrying
+	case cable.EventSubscriptionRejected:
+		// The socket is fine; this one channel is not. Say so, because the
+		// feed would otherwise just quietly stop updating.
+		name := "a channel"
+		if c, ok := m.store.Channel(ev.ChannelID); ok {
+			name = c.Title()
+		}
+		cmds = append(cmds, m.showToast("live updates for "+name+" stopped — access changed"))
 	default:
 		channelID, changed := m.store.Apply(ev)
 		if changed && channelID == m.focusedID {

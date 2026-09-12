@@ -1056,6 +1056,10 @@ func runTail(args []string) error {
 				fmt.Fprintln(os.Stderr, "── connection lost; retrying …")
 			case cable.EventConnected:
 				fmt.Fprintln(os.Stderr, "── live")
+			case cable.EventSubscriptionRejected:
+				// Nothing more will arrive on this channel; exiting beats
+				// leaving a tail that looks alive and prints nothing.
+				return fmt.Errorf("no longer authorized to watch #%s", slug)
 			}
 		}
 	}

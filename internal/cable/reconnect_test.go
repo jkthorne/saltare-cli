@@ -257,3 +257,69 @@ func TestRunStopsOnContextCancel(t *testing.T) {
 		t.Fatal("Run did not return after its context was cancelled")
 	}
 }
+
+// A rejected subscription used to be swallowed: the socket stayed up, the
+// channel received nothing, and nothing anywhere said why. It has to reach
+// the consumer.
+func TestRejectedSubscriptionSurfacesAndIsForgotten(t *testing.T) {
+	f := newFakeCable(t)
+	f.handleWS = func(ctx context.Context, ws *websocket.Conn) {
+		_ = ws.Write(ctx, websocket.MessageText, []byte(`{"type":"welcome"}`))
+		_ = ws.Write(ctx, websocket.MessageText, []byte(
+			`{"type":"reject_subscription","identifier":"{\"channel\":\"MessagesChannel\",\"channel_id\":9}"}`))
+		time.Sleep(80 * time.Millisecond)
+	}
+
+	c := NewClient(f.URL, staticToken("sk_sal_test"), []int64{7, 9})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	backoff := time.Second
+	go func() { _ = c.connectOnce(ctx, &backoff) }()
+
+	events := collect(ctx, c, 2)
+	if len(events) != 2 {
+		t.Fatalf("want connected + rejection, got %v", events)
+	}
+	if events[1].Type != EventSubscriptionRejected {
+		t.Fatalf("event = %v, want a rejection", events[1].Type)
+	}
+	if events[1].ChannelID != 9 {
+		t.Fatalf("rejection named channel %d, want 9", events[1].ChannelID)
+	}
+
+	// A refused channel must not be re-asked for on every reconnect.
+	ids := c.snapshotIDs()
+	if len(ids) != 1 || ids[0] != 7 {
+		t.Fatalf("subscription set = %v, want the rejected channel dropped", ids)
+	}
+}
+
+// A rejection with an unreadable identifier still has to be reported — the
+// consumer can say "a channel" — and must not drop an unrelated channel.
+func TestRejectedSubscriptionWithAnUnreadableIdentifier(t *testing.T) {
+	f := newFakeCable(t)
+	f.handleWS = func(ctx context.Context, ws *websocket.Conn) {
+		_ = ws.Write(ctx, websocket.MessageText, []byte(`{"type":"welcome"}`))
+		_ = ws.Write(ctx, websocket.MessageText, []byte(`{"type":"reject_subscription","identifier":"not json"}`))
+		time.Sleep(80 * time.Millisecond)
+	}
+
+	c := NewClient(f.URL, staticToken("sk_sal_test"), []int64{7})
+	ctx, cancel := context.WithTimeout(context.Background(), 10*time.Second)
+	defer cancel()
+
+	backoff := time.Second
+	go func() { _ = c.connectOnce(ctx, &backoff) }()
+
+	events := collect(ctx, c, 2)
+	if len(events) != 2 || events[1].Type != EventSubscriptionRejected {
+		t.Fatalf("want connected + rejection, got %v", events)
+	}
+	if events[1].ChannelID != 0 {
+		t.Errorf("unreadable identifier should yield channel 0, got %d", events[1].ChannelID)
+	}
+	if ids := c.snapshotIDs(); len(ids) != 1 {
+		t.Errorf("an unattributable rejection must not drop a channel: %v", ids)
+	}
+}
