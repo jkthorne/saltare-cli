@@ -528,7 +528,7 @@ func (m Model) sendToAgent(agent api.Agent, body string) tea.Cmd {
 }
 
 func (m Model) startCable(channelIDs []int64) tea.Cmd {
-	client := cable.NewClient(m.cfg.ServerURL, m.client.AccessToken(), channelIDs)
+	client := cable.NewClient(m.cfg.ServerURL, m.client.AccessToken, channelIDs)
 	ctx := m.ctx
 	return func() tea.Msg {
 		go client.Run(ctx)

@@ -1040,7 +1040,7 @@ func runTail(args []string) error {
 		}
 	}
 
-	cableClient := cable.NewClient(cfg.ServerURL, client.AccessToken(), []int64{target.ID})
+	cableClient := cable.NewClient(cfg.ServerURL, client.AccessToken, []int64{target.ID})
 	go cableClient.Run(ctx)
 
 	fmt.Fprintf(os.Stderr, "── tailing #%s (ctrl+c to stop)\n", slug)

@@ -49,7 +49,7 @@ const (
 // resubscribes the full set.
 type Client struct {
 	server string
-	token  string
+	token  func() string
 	events chan Event
 
 	mu     sync.Mutex
@@ -57,7 +57,14 @@ type Client struct {
 	notify chan int64 // ids to subscribe on the live connection
 }
 
-func NewClient(serverURL, accessToken string, channelIDs []int64) *Client {
+// NewClient takes a token *provider*, not a token. The access token is only
+// good for 30 days and the REST client rotates it reactively on a 401, so a
+// value captured here goes stale in any session that outlives the rotation —
+// and because the token rides the dial URL, a stale one means every reconnect
+// is rejected forever while REST carries on working. Pass api.Client's
+// AccessToken method: it reads the live token under the same mutex the
+// refresh writes it with.
+func NewClient(serverURL string, accessToken func() string, channelIDs []int64) *Client {
 	c := &Client{
 		server: serverURL,
 		token:  accessToken,
@@ -124,7 +131,9 @@ func (c *Client) Run(ctx context.Context) {
 }
 
 func (c *Client) connectOnce(ctx context.Context, backoff *time.Duration) error {
-	wsURL, err := websocketURL(c.server, c.token)
+	// Re-read the token on every attempt: a refresh may have rotated it
+	// since the last dial.
+	wsURL, err := websocketURL(c.server, c.token())
 	if err != nil {
 		return err
 	}
