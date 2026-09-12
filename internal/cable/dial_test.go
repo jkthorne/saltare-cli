@@ -25,9 +25,11 @@ type fakeCable struct {
 	handleWS func(ctx context.Context, ws *websocket.Conn)
 }
 
-func newFakeCable(t *testing.T, handle func(ctx context.Context, ws *websocket.Conn)) *fakeCable {
+// The caller sets handleWS before connecting; every test plays different
+// frames.
+func newFakeCable(t *testing.T) *fakeCable {
 	t.Helper()
-	f := &fakeCable{handleWS: handle}
+	f := &fakeCable{}
 	f.Server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		f.mu.Lock()
 		f.tokens = append(f.tokens, r.URL.Query().Get("access_token"))
@@ -97,7 +99,7 @@ func welcomeThenClose(f *fakeCable, wait time.Duration) func(context.Context, *w
 // captured it at construction reconnects with a rotated-out key forever. Each
 // dial must ask for the token again.
 func TestConnectOnceReReadsTheTokenEveryDial(t *testing.T) {
-	f := newFakeCable(t, func(ctx context.Context, ws *websocket.Conn) {})
+	f := newFakeCable(t)
 	f.handleWS = welcomeThenClose(f, 50*time.Millisecond)
 
 	tokens := []string{"sk_sal_first", "sk_sal_rotated"}
