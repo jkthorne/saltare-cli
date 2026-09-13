@@ -216,6 +216,22 @@ func (m Model) clickDB(y int) (tea.Model, tea.Cmd) {
 		}
 		d.sel = idx
 		return m.openDBGrid(d.list[idx].Slug)
+	case dbLevelGrid:
+		// The grid is a place you point at things: the cursor drives y and o as
+		// well as enter, so a click selects and a second click on the same row
+		// opens it — the feed's bargain, for the same reason.
+		if d.loading || d.database == nil {
+			return m, nil
+		}
+		idx := d.gridRowAt(y - m.rects.pane.y - dbGridTopLine)
+		if idx < 0 || idx >= len(d.rows) {
+			return m, nil
+		}
+		if idx == d.grid.Cursor() {
+			return m.openDBRow()
+		}
+		d.grid.SetCursor(idx)
+
 	case dbLevelDetail:
 		row := d.currentRow()
 		if row == nil || d.database == nil || d.editOpen {

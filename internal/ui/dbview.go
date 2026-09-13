@@ -2,10 +2,12 @@ package ui
 
 import (
 	"fmt"
+	"strings"
 
 	"github.com/charmbracelet/bubbles/table"
 	"github.com/charmbracelet/bubbles/textinput"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/jkthorne/saltare-cli/internal/api"
 	"github.com/jkthorne/saltare-cli/internal/tablefmt"
@@ -197,6 +199,32 @@ func (d *dbView) listLines(width int) *rowBuilder {
 	}
 	b.chrome("", styleFeedTopic.Render("enter open · r refresh · esc back"))
 	return b
+}
+
+// dbGridTopLine is the line grid.View() starts on inside the pane: renderGrid
+// draws the table's title and a blank line above it. TestDatabaseGridRowLines
+// checks this against the real frame.
+const dbGridTopLine = 2
+
+// gridRowAt maps a screen line inside the grid to the row drawn there.
+// bubbles/table keeps its scroll offset unexported, so the line can't be reached
+// by arithmetic — but the id column is always the first one the grid shows and
+// row ids are unique, so a rendered line identifies its own row.
+func (d *dbView) gridRowAt(line int) int {
+	lines := strings.Split(d.grid.View(), "\n")
+	if line < 0 || line >= len(lines) {
+		return -1
+	}
+	fields := strings.Fields(ansi.Strip(lines[line]))
+	if len(fields) == 0 {
+		return -1
+	}
+	for i, row := range d.grid.Rows() {
+		if len(row) > 0 && row[0] == fields[0] {
+			return i
+		}
+	}
+	return -1
 }
 
 func (d *dbView) renderGrid(width, height int) string {

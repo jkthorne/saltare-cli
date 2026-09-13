@@ -2448,12 +2448,7 @@ func (m Model) handleDBKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 			return m, nil
 		case "enter":
-			if d.built && len(d.rows) > 0 {
-				d.detailIdx = d.grid.Cursor()
-				d.fieldSel = 0
-				d.level = dbLevelDetail
-			}
-			return m, nil
+			return m.openDBRow()
 		case "y":
 			if d.database != nil {
 				if err := copyToClipboard("[[db:" + d.database.Slug + "]]"); err == nil {
@@ -2493,6 +2488,19 @@ func (m Model) handleDBKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 		d.loading = true
 		return m, m.fetchDatabases()
 	}
+	return m, nil
+}
+
+// openDBRow opens the row under the grid cursor. Shared by enter and by a
+// click, so the two can't drift.
+func (m Model) openDBRow() (tea.Model, tea.Cmd) {
+	d := &m.db
+	if !d.built || len(d.rows) == 0 {
+		return m, nil
+	}
+	d.detailIdx = d.grid.Cursor()
+	d.fieldSel = 0
+	d.level = dbLevelDetail
 	return m, nil
 }
 

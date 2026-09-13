@@ -966,3 +966,97 @@ func TestNarrowTerminalDropsTheHintsAndTheirSpans(t *testing.T) {
 		t.Fatal("a click on an empty status bar must do nothing")
 	}
 }
+
+// ── database grid ───────────────────────────────────────────────────────
+
+func gridModel(t *testing.T, rows int) Model {
+	t.Helper()
+	m := mouseModel(t, 100, 30, 0)
+	m.view = viewDB
+	m.db.level = dbLevelGrid
+	m.db.database = &api.Database{ID: 1, Slug: "crm", Name: "CRM", Schema: &api.DBSchema{
+		Columns: []api.DBColumn{{Key: "name", Name: "Name", Type: "text"}},
+	}}
+	for i := 0; i < rows; i++ {
+		m.db.rows = append(m.db.rows, api.DBRow{ID: int64(i + 1), Data: map[string]any{"name": fmt.Sprintf("row %d", i)}})
+	}
+	m.db.buildGrid()
+	return m
+}
+
+// dbGridTopLine is an assumption about what renderGrid draws above the table.
+// This is what checks it against the frame View actually produces.
+func TestDatabaseGridRowLinesMatchTheRenderedFrame(t *testing.T) {
+	m := gridModel(t, 8)
+
+	lines := strings.Split(m.View(), "\n")
+	// Row 3 (id "4") must be findable at the line the hit test maps to it.
+	found := -1
+	for y := m.rects.pane.y; y < m.rects.pane.y+m.rects.pane.h; y++ {
+		if m.db.gridRowAt(y-m.rects.pane.y-dbGridTopLine) == 3 {
+			found = y
+			break
+		}
+	}
+	if found < 0 {
+		t.Fatal("the hit test maps no line to row 3")
+	}
+	if !strings.Contains(ansi.Strip(lines[found]), "row 3") {
+		t.Fatalf("line %d should draw row 3, got %q", found, ansi.Strip(lines[found]))
+	}
+}
+
+// The cursor drives y and o as well as enter, so the grid takes the feed's
+// bargain: a click selects, a second click on the same row opens it.
+func TestDatabaseGridClickSelectsThenOpens(t *testing.T) {
+	m := gridModel(t, 8)
+
+	y := -1
+	for line := m.rects.pane.y; line < m.rects.pane.y+m.rects.pane.h; line++ {
+		if m.db.gridRowAt(line-m.rects.pane.y-dbGridTopLine) == 2 {
+			y = line
+			break
+		}
+	}
+	if y < 0 {
+		t.Fatal("no line draws row 2")
+	}
+
+	step, _ := m.Update(clickAt(m.rects.pane.x+4, y))
+	model := step.(Model)
+	if got := model.db.grid.Cursor(); got != 2 {
+		t.Fatalf("the first click must move the cursor, got %d", got)
+	}
+	if model.db.level != dbLevelGrid {
+		t.Fatal("the first click must not leave the grid")
+	}
+
+	step, _ = model.Update(clickAt(model.rects.pane.x+4, y))
+	model = step.(Model)
+	if model.db.level != dbLevelDetail || model.db.detailIdx != 2 {
+		t.Fatalf("the second click must open the row, level=%d idx=%d", model.db.level, model.db.detailIdx)
+	}
+}
+
+func TestDatabaseGridClickOnTheHeaderIsInert(t *testing.T) {
+	m := gridModel(t, 8)
+
+	// The header draws at the top of the grid and belongs to no row.
+	step, _ := m.Update(clickAt(m.rects.pane.x+4, m.rects.pane.y+dbGridTopLine))
+	model := step.(Model)
+	if model.db.level != dbLevelGrid || model.db.grid.Cursor() != 0 {
+		t.Fatalf("the header must not select a row, level=%d cursor=%d", model.db.level, model.db.grid.Cursor())
+	}
+}
+
+// While the rows are refetching the pane draws "loading…" where the grid was,
+// so the grid's own lines describe nothing on screen.
+func TestDatabaseGridClickIsInertWhileLoading(t *testing.T) {
+	m := gridModel(t, 8)
+	m.db.loading = true
+
+	step, _ := m.Update(clickAt(m.rects.pane.x+4, m.rects.pane.y+dbGridTopLine+2))
+	if step.(Model).db.level != dbLevelGrid {
+		t.Fatal("a click must not act on a grid that isn't on screen")
+	}
+}
