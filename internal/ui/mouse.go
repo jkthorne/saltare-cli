@@ -11,8 +11,8 @@ import tea "github.com/charmbracelet/bubbletea"
 // with tracking on in most terminals.
 //
 // Wired here: wheel scrolling, sidebar rows, chat message selection, composer
-// focus, home dashboard rows, and the tasks/documents/files/database list panes.
-// Not yet: the status bar, modal overlays, right-click menus, and drag.
+// focus, home dashboard rows, the tasks/documents/files/database list panes, and
+// the modal overlays. Not yet: the status bar, right-click menus, and drag.
 //
 // One rule decides where a click may land: it acts only where the keyboard
 // cursor currently is. A pane whose keys have been handed to a prompt (the
@@ -42,8 +42,9 @@ func (m Model) handleMouse(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	return m.handleClick(msg)
 }
 
-// overlayActive reports whether a modal surface owns the pane. Mouse input stays
-// keyboard-only there for now: clicking through to whatever is underneath would
+// overlayActive reports whether a modal surface owns the pane. Clicks go to the
+// overlay itself; everything behind it — the sidebar included — stays inert,
+// because clicking through to a surface whose keys the overlay has taken would
 // be worse than ignoring the click.
 func (m Model) overlayActive() bool {
 	return m.pal.active || m.search.active || m.notify.active || m.attach.active ||
@@ -87,7 +88,10 @@ func (m Model) handleWheel(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 
 func (m Model) handleClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 	if m.overlayActive() {
-		return m, nil
+		if !m.rects.pane.contains(msg.X, msg.Y) {
+			return m, nil
+		}
+		return m.clickOverlay(msg.Y)
 	}
 	if m.rects.sidebar.contains(msg.X, msg.Y) {
 		return m.clickSidebar(msg.Y)
@@ -216,6 +220,65 @@ func (m Model) clickDB(y int) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		d.fieldSel = idx
+	}
+	return m, nil
+}
+
+// clickOverlay runs the row under the pointer, which is what enter does in every
+// one of these: they are all pickers, and a picker's whole purpose is choosing a
+// row. The text input keeps focus either way — a click that only moved a
+// highlight would leave the overlay needing a keystroke it was opened to avoid.
+func (m Model) clickOverlay(y int) (tea.Model, tea.Cmd) {
+	switch {
+	case m.pal.active:
+		idx := m.paneItemAt(m.pal.lines(m.rects.pane.w), y)
+		if idx == noTarget || idx >= len(m.pal.filtered) {
+			return m, nil
+		}
+		item := m.pal.filtered[idx]
+		m.pal.close()
+		return m.runPaletteItem(item)
+
+	case m.search.active:
+		idx := m.paneItemAt(m.search.lines(m.rects.pane.w), y)
+		if idx == noTarget || idx >= len(m.search.rows) || !m.search.rows[idx].selectable() {
+			return m, nil
+		}
+		m.search.sel = idx
+		return m.openSearchResult(m.search.rows[idx])
+
+	case m.notify.active:
+		idx := m.paneItemAt(m.notify.lines(m.rects.pane.w), y)
+		if idx == noTarget || idx >= len(m.notify.items) {
+			return m, nil
+		}
+		m.notify.sel = idx
+		return m.openNotification(m.notify.items[idx])
+
+	case m.attach.active:
+		idx := m.paneItemAt(m.attachLines(m.rects.pane.w), y)
+		if idx == noTarget || idx >= len(m.attach.results) {
+			return m, nil
+		}
+		return m.insertUploadRef(m.attach.results[idx].Slug)
+
+	case m.threadPicker.active:
+		idx := m.paneItemAt(m.threadPickerLines(m.rects.pane.w), y)
+		if idx == noTarget || idx >= len(m.threadPicker.threads) {
+			return m, nil
+		}
+		thread := m.threadPicker.threads[idx]
+		m.threadPicker.active = false
+		return m.openThread(thread)
+
+	case m.embedPicker.active:
+		idx := m.paneItemAt(m.embedPickerLines(m.rects.pane.w), y)
+		if idx == noTarget || idx >= len(m.embedPicker.refs) {
+			return m, nil
+		}
+		ref := m.embedPicker.refs[idx]
+		m.embedPicker.active = false
+		return m.followEmbed(ref)
 	}
 	return m, nil
 }

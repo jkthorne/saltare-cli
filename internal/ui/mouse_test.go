@@ -1,6 +1,7 @@
 package ui
 
 import (
+	"encoding/json"
 	"errors"
 	"fmt"
 	"strings"
@@ -691,5 +692,177 @@ func TestDatabaseRowDetailClickMovesTheFieldCursor(t *testing.T) {
 	}
 	if cmd != nil || model.db.editOpen {
 		t.Fatal("a click must not open the cell editor")
+	}
+}
+
+// ── overlays ────────────────────────────────────────────────────────────
+
+// paletteRowOf is the index of a filtered palette row by label, so a test says
+// what it means instead of counting entries that shift when the list grows.
+func paletteRowOf(t *testing.T, m Model, label string) int {
+	t.Helper()
+	for i, it := range m.pal.filtered {
+		if strings.Contains(it.label, label) {
+			return i
+		}
+	}
+	t.Fatalf("palette has no row containing %q", label)
+	return -1
+}
+
+func TestPaletteClickRunsTheItem(t *testing.T) {
+	m := mouseModel(t, 100, 30, 2)
+	step, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlK})
+	open := step.(Model)
+
+	idx := paletteRowOf(t, open, "documents")
+	y := paneLineOf(open, open.pal.lines(open.rects.pane.w), idx)
+	step, cmd := open.Update(clickAt(open.rects.pane.x+4, y))
+	model := step.(Model)
+
+	if model.pal.active {
+		t.Fatal("running an item must close the palette, as enter does")
+	}
+	if model.view != viewDocs || cmd == nil {
+		t.Fatalf("a click must run the item, view=%d cmd=%v", model.view, cmd != nil)
+	}
+}
+
+func TestPaletteClickOnChromeIsInert(t *testing.T) {
+	m := mouseModel(t, 100, 30, 2)
+	step, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlK})
+	open := step.(Model)
+
+	// The title line, above every row.
+	step, _ = open.Update(clickAt(open.rects.pane.x+4, open.rects.pane.y+panePadTop))
+	if !step.(Model).pal.active {
+		t.Fatal("clicking chrome must leave the palette up")
+	}
+}
+
+func TestSearchResultClickOpensIt(t *testing.T) {
+	m := mouseModel(t, 100, 30, 2)
+	m.search.active = true
+	m.search.ran = true
+	m.search.rows = []searchRow{
+		{header: "messages"},
+		{message: &api.SearchMessage{Message: api.Message{ID: 101, ChannelID: 1, Body: "hello", Sender: api.Sender{Name: "Ada"}}}},
+	}
+
+	y := paneLineOf(m, m.search.lines(m.rects.pane.w), 1)
+	step, _ := m.Update(clickAt(m.rects.pane.x+4, y))
+	model := step.(Model)
+
+	if model.search.active {
+		t.Fatal("opening a result must close the search overlay")
+	}
+	if model.view != viewChat || model.feedSel != 101 {
+		t.Fatalf("a click must jump to the hit, view=%d feedSel=%d", model.view, model.feedSel)
+	}
+}
+
+func TestSearchHeaderClickIsInert(t *testing.T) {
+	m := mouseModel(t, 100, 30, 2)
+	m.search.active = true
+	m.search.ran = true
+	m.search.rows = []searchRow{
+		{header: "messages"},
+		{message: &api.SearchMessage{Message: api.Message{ID: 101, ChannelID: 1, Sender: api.Sender{Name: "Ada"}}}},
+	}
+
+	rows := m.search.lines(m.rects.pane.w)
+	if rows.lineOf(0) != -1 {
+		t.Fatal("a section header must not be a click target")
+	}
+	// The header still draws a line — clicking it must do nothing.
+	headerY := rows.lineOf(1) - 1 + m.rects.pane.y + panePadTop
+	step, _ := m.Update(clickAt(m.rects.pane.x+4, headerY))
+	if !step.(Model).search.active {
+		t.Fatal("clicking a header must leave the overlay up")
+	}
+}
+
+func TestInboxClickJumpsToTheMessage(t *testing.T) {
+	m := mouseModel(t, 100, 30, 2)
+	m.focusedID = 0
+	m.notify.active = true
+	// The notification's message is an anonymous struct in the serializer's
+	// shape — decoding a payload is how a test gets one.
+	var notification api.Notification
+	payload := `{"id":1,"action":"mentioned","message":{"channel_id":1,"channel_slug":"general","preview":"hi"}}`
+	if err := json.Unmarshal([]byte(payload), &notification); err != nil {
+		t.Fatal(err)
+	}
+	m.notify.items = []api.Notification{notification}
+
+	y := paneLineOf(m, m.notify.lines(m.rects.pane.w), 0)
+	step, _ := m.Update(clickAt(m.rects.pane.x+4, y))
+	model := step.(Model)
+
+	if model.notify.active {
+		t.Fatal("jumping must close the inbox")
+	}
+	if model.focusedID != 1 || model.view != viewChat {
+		t.Fatalf("a click must open the channel, focusedID=%d view=%d", model.focusedID, model.view)
+	}
+}
+
+func TestAttachClickInsertsTheEmbed(t *testing.T) {
+	m := mouseModel(t, 100, 30, 2)
+	m.attach.active = true
+	m.attach.results = []api.Upload{
+		{ID: 1, Slug: "q4-report", Title: "Q4 Report"},
+		{ID: 2, Slug: "logo", Title: "Logo"},
+	}
+
+	y := paneLineOf(m, m.attachLines(m.rects.pane.w), 1)
+	step, _ := m.Update(clickAt(m.rects.pane.x+4, y))
+	model := step.(Model)
+
+	if model.attach.active {
+		t.Fatal("inserting must close the attach prompt")
+	}
+	if !strings.Contains(model.comp.value(), "[[upload:logo]]") {
+		t.Fatalf("a click must insert the embed, composer holds %q", model.comp.value())
+	}
+}
+
+func TestThreadPickerClickOpensTheThread(t *testing.T) {
+	m := mouseModel(t, 100, 30, 2)
+	m.threadPicker.active = true
+	m.threadPicker.threads = []api.Channel{
+		{ID: 7, Slug: "t-one", Name: "One", Kind: "thread"},
+		{ID: 8, Slug: "t-two", Name: "Two", Kind: "thread"},
+	}
+
+	y := paneLineOf(m, m.threadPickerLines(m.rects.pane.w), 1)
+	step, _ := m.Update(clickAt(m.rects.pane.x+4, y))
+	model := step.(Model)
+
+	if model.threadPicker.active {
+		t.Fatal("opening a thread must close the picker")
+	}
+	if model.focusedID != 8 {
+		t.Fatalf("a click must open the clicked thread, focusedID=%d", model.focusedID)
+	}
+}
+
+func TestEmbedPickerClickFollowsTheReference(t *testing.T) {
+	m := mouseModel(t, 100, 30, 2)
+	m.embedPicker.active = true
+	m.embedPicker.refs = []embedRef{
+		{kind: "doc", ref: "spec"},
+		{kind: "doc", ref: "notes"},
+	}
+
+	y := paneLineOf(m, m.embedPickerLines(m.rects.pane.w), 1)
+	step, cmd := m.Update(clickAt(m.rects.pane.x+4, y))
+	model := step.(Model)
+
+	if model.embedPicker.active {
+		t.Fatal("following must close the picker")
+	}
+	if cmd == nil {
+		t.Fatal("a click must follow the clicked reference")
 	}
 }

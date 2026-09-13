@@ -68,11 +68,16 @@ func notificationText(n api.Notification) string {
 }
 
 func (n *notifyView) render(width, height int) string {
-	var rows []string
-	rows = append(rows, stylePickerTitle.Render("◉ notifications"))
-	rows = append(rows, "")
+	body := n.lines(width).join()
+	return styleTasksPane.Width(width).Height(height).MaxHeight(height).Render(body)
+}
+
+// lines lays the inbox out, tagging each line with its index into n.items.
+func (n *notifyView) lines(width int) *rowBuilder {
+	b := &rowBuilder{}
+	b.chrome(stylePickerTitle.Render("◉ notifications"), "")
 	if len(n.items) == 0 {
-		rows = append(rows, styleFeedTopic.Render("all clear"))
+		b.chrome(styleFeedTopic.Render("all clear"))
 	}
 	for i, item := range n.items {
 		line := notificationText(item)
@@ -80,13 +85,8 @@ func (n *notifyView) render(width, height int) string {
 			line += styleFeedTopic.Render("  #" + item.Message.ChannelSlug)
 		}
 		line += "  " + styleTimestamp.Render(item.CreatedAt.Local().Format("Jan 2 15:04"))
-		if i == n.sel {
-			rows = append(rows, stylePickerSel.Render("▸ "+truncate(line, width-6)))
-		} else {
-			rows = append(rows, stylePickerRow.Render("  "+truncate(line, width-6)))
-		}
+		b.row(pickerLine(line, i == n.sel, width), i)
 	}
-	rows = append(rows, "", styleFeedTopic.Render("enter jump · R mark all read · esc close"))
-	body := strings.Join(rows, "\n")
-	return styleTasksPane.Width(width).Height(height).MaxHeight(height).Render(body)
+	b.chrome("", styleFeedTopic.Render("enter jump · R mark all read · esc close"))
+	return b
 }

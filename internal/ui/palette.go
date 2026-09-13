@@ -137,22 +137,25 @@ func capRows(items []paletteItem) []paletteItem {
 }
 
 func (p *palette) render(width int) string {
-	var rows []string
-	rows = append(rows, stylePickerTitle.Render("command palette"), p.input.View(), "")
+	return p.lines(width).join()
+}
+
+// lines lays the palette out, tagging each line with its index into p.filtered —
+// which is the filtered list, not p.items, so a click lands on what the query
+// left on screen.
+func (p *palette) lines(width int) *rowBuilder {
+	b := &rowBuilder{}
+	b.chrome(stylePickerTitle.Render("command palette"), p.input.View(), "")
 	if len(p.filtered) == 0 {
-		rows = append(rows, stylePickerRow.Render("no matches"))
+		b.chrome(stylePickerRow.Render("no matches"))
 	}
 	for i, it := range p.filtered {
 		label := it.label
 		if it.hint != "" {
 			label += "  " + styleFeedTopic.Render(it.hint)
 		}
-		if i == p.sel {
-			rows = append(rows, stylePickerSel.Render("▸ "+truncate(label, width-6)))
-		} else {
-			rows = append(rows, stylePickerRow.Render("  "+truncate(label, width-6)))
-		}
+		b.row(pickerLine(label, i == p.sel, width), i)
 	}
-	rows = append(rows, "", styleFeedTopic.Render("enter run · esc close"))
-	return strings.Join(rows, "\n")
+	b.chrome("", styleFeedTopic.Render("enter run · esc close"))
+	return b
 }

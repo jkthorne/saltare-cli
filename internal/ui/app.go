@@ -1633,16 +1633,26 @@ func (m Model) handleNotifyKey(key string) (tea.Model, tea.Cmd) {
 		return m, m.readAllNotifications()
 	case "enter":
 		item, ok := m.notify.selected()
-		if !ok || item.Message == nil {
+		if !ok {
 			return m, nil
 		}
-		m.notify.active = false
-		m.view = viewChat
-		if _, ok := m.store.Channel(item.Message.ChannelID); ok {
-			return m.openChannelByID(item.Message.ChannelID)
-		}
-		m.softErr = "channel not loaded — refresh (ctrl+r) and retry"
+		return m.openNotification(item)
 	}
+	return m, nil
+}
+
+// openNotification jumps to the message a notification points at. Shared by
+// enter and by a click, so the two can't drift.
+func (m Model) openNotification(item api.Notification) (tea.Model, tea.Cmd) {
+	if item.Message == nil {
+		return m, nil
+	}
+	m.notify.active = false
+	m.view = viewChat
+	if _, ok := m.store.Channel(item.Message.ChannelID); ok {
+		return m.openChannelByID(item.Message.ChannelID)
+	}
+	m.softErr = "channel not loaded — refresh (ctrl+r) and retry"
 	return m, nil
 }
 
@@ -1878,18 +1888,24 @@ func (m Model) handleEmbedPickerKey(key string) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) renderEmbedPicker(width int) string {
-	var rows []string
-	rows = append(rows, stylePickerTitle.Render("⟨references⟩"), "")
+	body := m.embedPickerLines(width).join()
+	return lipgloss.NewStyle().Width(width).Height(m.height-1).Padding(1, 2).Render(body)
+}
+
+// embedPickerLines tags each line with its index into the message's references.
+func (m Model) embedPickerLines(width int) *rowBuilder {
+	b := &rowBuilder{}
+	b.chrome(stylePickerTitle.Render("⟨references⟩"), "")
 	for i, ref := range m.embedPicker.refs {
 		row := "⟨" + ref.kind + ":" + ref.ref + "⟩"
 		if i == m.embedPicker.sel {
-			rows = append(rows, stylePickerSel.Render("▸ "+truncate(row, width-4)))
+			b.row(stylePickerSel.Render("▸ "+truncate(row, width-4)), i)
 		} else {
-			rows = append(rows, stylePickerRow.Render("  "+truncate(row, width-4)))
+			b.row(stylePickerRow.Render("  "+truncate(row, width-4)), i)
 		}
 	}
-	rows = append(rows, "", styleFeedTopic.Render("enter follow · esc close"))
-	return lipgloss.NewStyle().Width(width).Height(m.height-1).Padding(1, 2).Render(strings.Join(rows, "\n"))
+	b.chrome("", styleFeedTopic.Render("enter follow · esc close"))
+	return b
 }
 
 // followEmbed opens whatever a reference points at; types sal can't render
@@ -3269,22 +3285,27 @@ func (m Model) feedTitle(width int) string {
 }
 
 func (m Model) renderThreadPicker(width int) string {
-	var rows []string
-	rows = append(rows, stylePickerTitle.Render("↳ threads"), "")
+	body := m.threadPickerLines(width).join()
+	return lipgloss.NewStyle().Width(width).Height(m.height-1).Padding(1, 2).Render(body)
+}
+
+// threadPickerLines tags each line with its index into the thread list.
+func (m Model) threadPickerLines(width int) *rowBuilder {
+	b := &rowBuilder{}
+	b.chrome(stylePickerTitle.Render("↳ threads"), "")
 	if len(m.threadPicker.threads) == 0 {
-		rows = append(rows, stylePickerRow.Render("no threads in this channel yet"))
+		b.chrome(stylePickerRow.Render("no threads in this channel yet"))
 	}
 	for i, t := range m.threadPicker.threads {
 		row := fmt.Sprintf("↳ %s  ·  %d msgs", t.Name, t.MessagesCount)
 		if i == m.threadPicker.sel {
-			rows = append(rows, stylePickerSel.Render("▸ "+truncate(row, width-4)))
+			b.row(stylePickerSel.Render("▸ "+truncate(row, width-4)), i)
 		} else {
-			rows = append(rows, stylePickerRow.Render("  "+truncate(row, width-4)))
+			b.row(stylePickerRow.Render("  "+truncate(row, width-4)), i)
 		}
 	}
-	rows = append(rows, "", styleFeedTopic.Render("enter open · esc close"))
-	body := strings.Join(rows, "\n")
-	return lipgloss.NewStyle().Width(width).Height(m.height-1).Padding(1, 2).Render(body)
+	b.chrome("", styleFeedTopic.Render("enter open · esc close"))
+	return b
 }
 
 func (m Model) statusBar() string {

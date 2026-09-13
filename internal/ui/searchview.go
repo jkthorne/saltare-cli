@@ -145,36 +145,43 @@ func (s *searchView) rowLine(row searchRow, width int) string {
 }
 
 func (s *searchView) render(width, height int) string {
+	body := s.lines(width).join()
+	return styleTasksPane.Width(width).Height(height).MaxHeight(height).Render(body)
+}
+
+// lines lays the results out, tagging each line with its index into s.rows.
+// Section headers draw on their own lines and target nothing, exactly as
+// move() skips them.
+func (s *searchView) lines(width int) *rowBuilder {
 	title := "⌕ search"
 	if s.channel != "" {
 		title += "  " + styleFeedTopic.Render("#"+s.channel)
 	}
-	var rows []string
-	rows = append(rows, stylePickerTitle.Render(title), s.input.View(), "")
+	b := &rowBuilder{}
+	b.chrome(stylePickerTitle.Render(title), s.input.View(), "")
 
 	switch {
 	case s.loading:
-		rows = append(rows, styleFeedTopic.Render("searching…"))
+		b.chrome(styleFeedTopic.Render("searching…"))
 	case !s.ran:
-		rows = append(rows, styleFeedTopic.Render("type at least 2 characters"))
+		b.chrome(styleFeedTopic.Render("type at least 2 characters"))
 	case len(s.rows) == 0:
-		rows = append(rows, styleFeedTopic.Render("no results"))
+		b.chrome(styleFeedTopic.Render("no results"))
 	}
 
 	for i, row := range s.rows {
 		if row.header != "" {
-			rows = append(rows, styleDateLabel.Render(strings.ToUpper(row.header)))
+			b.chrome(styleDateLabel.Render(strings.ToUpper(row.header)))
 			continue
 		}
 		line := s.rowLine(row, width-6)
 		if i == s.sel {
-			rows = append(rows, stylePickerSel.Render("▸ "+line))
+			b.row(stylePickerSel.Render("▸ "+line), i)
 		} else {
-			rows = append(rows, stylePickerRow.Render("  "+line))
+			b.row(stylePickerRow.Render("  "+line), i)
 		}
 	}
 
-	rows = append(rows, "", styleFeedTopic.Render("enter open · y copy link/embed · esc close"))
-	body := strings.Join(rows, "\n")
-	return styleTasksPane.Width(width).Height(height).MaxHeight(height).Render(body)
+	b.chrome("", styleFeedTopic.Render("enter open · y copy link/embed · esc close"))
+	return b
 }

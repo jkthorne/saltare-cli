@@ -136,11 +136,7 @@ func (m Model) handleAttachKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 			}
 		}
 		if a.sel < len(a.results) {
-			slug := a.results[a.sel].Slug
-			a.close()
-			m.comp.insertAtCursor("[[upload:" + slug + "]]")
-			m.focus = focusComposer
-			return m, m.comp.focus()
+			return m.insertUploadRef(a.results[a.sel].Slug)
 		}
 		return m, nil
 	}
@@ -149,21 +145,37 @@ func (m Model) handleAttachKey(msg tea.KeyMsg) (tea.Model, tea.Cmd) {
 	return m, m.updateAttachInput(msg)
 }
 
+// insertUploadRef closes the prompt and drops the embed at the composer cursor.
+// Shared by enter and by a click, so the two can't drift.
+func (m Model) insertUploadRef(slug string) (tea.Model, tea.Cmd) {
+	m.attach.close()
+	m.comp.insertAtCursor("[[upload:" + slug + "]]")
+	m.focus = focusComposer
+	return m, m.comp.focus()
+}
+
 func (m Model) renderAttach(width, height int) string {
+	body := m.attachLines(width).join()
+	return styleTasksPane.Width(width).Height(height).MaxHeight(height).Render(body)
+}
+
+// attachLines lays the prompt out, tagging each line with its index into the
+// results. A path-looking query has no results to tag — enter uploads instead.
+func (m Model) attachLines(width int) *rowBuilder {
 	a := m.attach
-	var rows []string
-	rows = append(rows, stylePickerTitle.Render("⇱ attach"), "", a.input.View(), "")
+	b := &rowBuilder{}
+	b.chrome(stylePickerTitle.Render("⇱ attach"), "", a.input.View(), "")
 
 	value := strings.TrimSpace(a.input.Value())
 	switch {
 	case a.uploading:
-		rows = append(rows, styleFeedTopic.Render("uploading "+value+" …"))
+		b.chrome(styleFeedTopic.Render("uploading " + value + " …"))
 	case looksLikePath(value):
-		rows = append(rows, styleFeedTopic.Render("enter uploads this file"))
+		b.chrome(styleFeedTopic.Render("enter uploads this file"))
 	case a.loading:
-		rows = append(rows, styleFeedTopic.Render("searching…"))
+		b.chrome(styleFeedTopic.Render("searching…"))
 	case len(a.results) == 0 && len(value) >= 2:
-		rows = append(rows, styleFeedTopic.Render("no matches"))
+		b.chrome(styleFeedTopic.Render("no matches"))
 	default:
 		for i, u := range a.results {
 			category := "pending"
@@ -171,14 +183,10 @@ func (m Model) renderAttach(width, height int) string {
 				category = *u.Category
 			}
 			label := u.Slug + "  " + styleFeedTopic.Render(category+" · "+tablefmt.HumanSize(u.FileSize)) + "  " + u.Title
-			if i == a.sel {
-				rows = append(rows, stylePickerSel.Render("▸ "+truncate(label, width-6)))
-			} else {
-				rows = append(rows, stylePickerRow.Render("  "+truncate(label, width-6)))
-			}
+			b.row(pickerLine(label, i == a.sel, width), i)
 		}
 	}
 
-	rows = append(rows, "", styleFeedTopic.Render("enter insert [[upload:slug]] · esc cancel"))
-	return styleTasksPane.Width(width).Height(height).MaxHeight(height).Render(strings.Join(rows, "\n"))
+	b.chrome("", styleFeedTopic.Render("enter insert [[upload:slug]] · esc cancel"))
+	return b
 }
