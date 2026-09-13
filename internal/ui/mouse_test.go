@@ -9,6 +9,7 @@ import (
 
 	tea "github.com/charmbracelet/bubbletea"
 	"github.com/charmbracelet/lipgloss"
+	"github.com/charmbracelet/x/ansi"
 
 	"github.com/jkthorne/saltare-cli/internal/api"
 )
@@ -864,5 +865,104 @@ func TestEmbedPickerClickFollowsTheReference(t *testing.T) {
 	}
 	if cmd == nil {
 		t.Fatal("a click must follow the clicked reference")
+	}
+}
+
+// ── status bar ──────────────────────────────────────────────────────────
+
+// statusHintX is a column inside the named hint, found the way View lays it out.
+func statusHintX(t *testing.T, m Model, label string) int {
+	t.Helper()
+	_, spans := m.statusBarLine()
+	for i, hint := range statusHints {
+		if !strings.Contains(hint.label, label) {
+			continue
+		}
+		for _, span := range spans {
+			if span.key == statusHints[i].key {
+				return span.x + 1
+			}
+		}
+		t.Fatalf("hint %q is not clickable", label)
+	}
+	t.Fatalf("status bar has no hint containing %q", label)
+	return -1
+}
+
+// The spans are only right if they name the columns the line actually draws.
+func TestStatusHintSpansMatchTheRenderedLine(t *testing.T) {
+	m := mouseModel(t, 140, 30, 2)
+
+	line, spans := m.statusBarLine()
+	if len(spans) == 0 {
+		t.Fatal("a 140-column terminal must have room for the hints")
+	}
+	// Cells, not bytes: the separator's middot is one column and two bytes.
+	plain := []rune(ansi.Strip(line))
+	for i, hint := range statusHints {
+		if !hint.press {
+			continue
+		}
+		span := spans[i]
+		if span.x+span.w > len(plain) {
+			t.Fatalf("hint %q spans past the line: %d+%d in %d", hint.label, span.x, span.w, len(plain))
+		}
+		if got := string(plain[span.x : span.x+span.w]); got != hint.label {
+			t.Errorf("span for %q covers %q", hint.label, got)
+		}
+	}
+}
+
+func TestStatusHintClickOpensThePalette(t *testing.T) {
+	m := mouseModel(t, 140, 30, 2)
+
+	x := statusHintX(t, m, "palette")
+	step, _ := m.Update(clickAt(x, m.rects.status.y))
+	if !step.(Model).pal.active {
+		t.Fatal("clicking the palette hint must open the palette")
+	}
+}
+
+// The hints name global keys, so they answer from under an overlay exactly as
+// the keys do.
+func TestStatusHintClickWorksUnderAnOverlay(t *testing.T) {
+	m := mouseModel(t, 140, 30, 2)
+	step, _ := m.Update(tea.KeyMsg{Type: tea.KeyCtrlK})
+	open := step.(Model)
+
+	x := statusHintX(t, open, "home")
+	step, _ = open.Update(clickAt(x, open.rects.status.y))
+	model := step.(Model)
+	if model.view != viewHome || model.pal.active {
+		t.Fatalf("ctrl+h from the status bar must go home and close the palette, view=%d", model.view)
+	}
+}
+
+// Quit has no undo, so the hint is a label and nothing else.
+func TestStatusQuitHintIsNotClickable(t *testing.T) {
+	m := mouseModel(t, 140, 30, 2)
+
+	_, spans := m.statusBarLine()
+	for _, span := range spans {
+		if span.key == tea.KeyCtrlC {
+			t.Fatal("the quit hint must not be clickable")
+		}
+	}
+}
+
+func TestNarrowTerminalDropsTheHintsAndTheirSpans(t *testing.T) {
+	m := mouseModel(t, 40, 30, 2)
+
+	line, spans := m.statusBarLine()
+	if spans != nil {
+		t.Fatalf("hints that aren't drawn must not be clickable, got %d spans", len(spans))
+	}
+	if strings.Contains(ansi.Strip(line), "palette") {
+		t.Fatal("the hint group must be dropped when it doesn't fit")
+	}
+	// A click where the hints would have been must be inert, not a wild press.
+	step, cmd := m.Update(clickAt(m.width-4, m.rects.status.y))
+	if cmd != nil || step.(Model).pal.active {
+		t.Fatal("a click on an empty status bar must do nothing")
 	}
 }

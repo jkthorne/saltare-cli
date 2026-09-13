@@ -3308,7 +3308,36 @@ func (m Model) threadPickerLines(width int) *rowBuilder {
 	return b
 }
 
-func (m Model) statusBar() string {
+// statusHint is one entry in the status bar's right-hand key group.
+type statusHint struct {
+	label string
+	key   tea.KeyType
+	// press says whether a click on the hint presses its key. Quit is a label
+	// only: a stray click must not end the session, and there is no undo for it.
+	press bool
+}
+
+var statusHints = []statusHint{
+	{label: "ctrl+k palette", key: tea.KeyCtrlK, press: true},
+	{label: "ctrl+h home", key: tea.KeyCtrlH, press: true},
+	{label: "ctrl+n inbox", key: tea.KeyCtrlN, press: true},
+	{label: "ctrl+t threads", key: tea.KeyCtrlT, press: true},
+	{label: "ctrl+c quit", key: tea.KeyCtrlC},
+}
+
+const statusHintSep = " · "
+
+// statusSpan is where a clickable hint landed on the bottom line.
+type statusSpan struct {
+	x, w int
+	key  tea.KeyType
+}
+
+// statusBarLine renders the bottom line and reports the columns each clickable
+// hint occupies. View draws the string and hit-testing reads the spans, so the
+// two can't disagree about which column says "palette" — and when the terminal
+// is too narrow for the hints, the group is dropped and there are no spans.
+func (m Model) statusBarLine() (string, []statusSpan) {
 	var conn string
 	switch m.conn {
 	case connLive:
@@ -3335,13 +3364,40 @@ func (m Model) statusBar() string {
 	if m.softErr != "" {
 		left += styleStatusDead.Render(" ! " + truncate(m.softErr, 40))
 	}
-	keys := styleStatusKeys.Render("ctrl+k palette · ctrl+h home · ctrl+n inbox · ctrl+t threads · ctrl+c quit ")
+
+	var text strings.Builder
+	offsets := make([]int, len(statusHints))
+	col := 0
+	for i, hint := range statusHints {
+		if i > 0 {
+			text.WriteString(statusHintSep)
+			col += lipgloss.Width(statusHintSep)
+		}
+		offsets[i] = col
+		text.WriteString(hint.label)
+		col += lipgloss.Width(hint.label)
+	}
+	keys := styleStatusKeys.Render(text.String() + " ")
 
 	gap := m.width - lipgloss.Width(left) - lipgloss.Width(keys)
 	if gap < 1 {
-		return left
+		return left, nil
 	}
-	return left + styleStatusBar.Render(strings.Repeat(" ", gap)) + keys
+
+	keysStart := m.width - lipgloss.Width(keys)
+	var spans []statusSpan
+	for i, hint := range statusHints {
+		if !hint.press {
+			continue
+		}
+		spans = append(spans, statusSpan{x: keysStart + offsets[i], w: lipgloss.Width(hint.label), key: hint.key})
+	}
+	return left + styleStatusBar.Render(strings.Repeat(" ", gap)) + keys, spans
+}
+
+func (m Model) statusBar() string {
+	line, _ := m.statusBarLine()
+	return line
 }
 
 // firstUnreadItem is the boot cursor: the first unread channel, else the first

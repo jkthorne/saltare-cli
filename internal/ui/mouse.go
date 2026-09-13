@@ -11,8 +11,9 @@ import tea "github.com/charmbracelet/bubbletea"
 // with tracking on in most terminals.
 //
 // Wired here: wheel scrolling, sidebar rows, chat message selection, composer
-// focus, home dashboard rows, the tasks/documents/files/database list panes, and
-// the modal overlays. Not yet: the status bar, right-click menus, and drag.
+// focus, home dashboard rows, the tasks/documents/files/database list panes, the
+// modal overlays, and the status bar's key hints. Not yet: right-click menus
+// and drag.
 //
 // One rule decides where a click may land: it acts only where the keyboard
 // cursor currently is. A pane whose keys have been handed to a prompt (the
@@ -87,6 +88,11 @@ func (m Model) handleWheel(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 }
 
 func (m Model) handleClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
+	// The status bar sits under everything, overlays included — its hints name
+	// global keys, and they answer a click wherever those keys answer a press.
+	if m.rects.status.contains(msg.X, msg.Y) {
+		return m.clickStatus(msg.X)
+	}
 	if m.overlayActive() {
 		if !m.rects.pane.contains(msg.X, msg.Y) {
 			return m, nil
@@ -97,7 +103,7 @@ func (m Model) handleClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		return m.clickSidebar(msg.Y)
 	}
 	if !m.rects.pane.contains(msg.X, msg.Y) {
-		return m, nil // the status bar isn't wired yet
+		return m, nil
 	}
 	switch m.view {
 	case viewHome:
@@ -220,6 +226,21 @@ func (m Model) clickDB(y int) (tea.Model, tea.Cmd) {
 			return m, nil
 		}
 		d.fieldSel = idx
+	}
+	return m, nil
+}
+
+// clickStatus presses the key the hint under the pointer names. Routing the
+// click back through handleKey rather than calling the action directly is what
+// keeps the mouse from reaching a state the keyboard can't: ctrl+k, ctrl+h and
+// ctrl+n are global, ctrl+t only exists in chat, and the key router is the one
+// place that knows the difference.
+func (m Model) clickStatus(x int) (tea.Model, tea.Cmd) {
+	_, spans := m.statusBarLine()
+	for _, span := range spans {
+		if x >= span.x && x < span.x+span.w {
+			return m.handleKey(tea.KeyMsg{Type: span.key})
+		}
 	}
 	return m, nil
 }
