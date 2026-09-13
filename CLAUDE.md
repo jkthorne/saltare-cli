@@ -26,15 +26,21 @@ gofmt -l .                 # must print nothing; CI enforces
 bin/ci                     # all four of the above, as CI runs them
 ```
 
-`bin/ci` is the gate and it runs here: every step this repo has is Linux-shaped,
-so the local run is a complete substitute for the remote one, not an
-approximation. **GitHub CI is dispatch-only** — it no longer runs on push. Ask
-for a clean-machine second opinion with `bin/ci --remote`;
-`bin/ci --install-hook` puts the run on `git push`. `release.yml` is unchanged
-and still fires on a `v*` tag. `bin/ci` is generated from
-`saltare-machina/ci/core.sh` + `ci/repos/saltare-cli.sh` — edit those and run
-`bin/sync-ci saltare-cli`, never `bin/ci` itself. `mise.toml` pins the Go
-toolchain local CI uses, mirroring the workflow's `go-version-file: go.mod`.
+**Two gates, and neither replaces the other.** `bin/ci` runs the same four steps
+locally — fast, and `bin/ci --install-hook` puts it on `git push`. GitHub CI
+runs them on every push and PR, on a machine that has never seen the code;
+`bin/ci --remote` asks for a run on demand. A local gate cannot substitute for
+the remote one however Linux-shaped the steps are, because it runs on the box
+that wrote the code: it shares its toolchain, its caches and its untracked
+files. `release.yml` still fires on a `v*` tag.
+
+`mise.toml` pins the Go toolchain local CI uses, mirroring the workflow's
+`go-version-file: go.mod` — keep the two in step. `bin/ci` is **vendored here**:
+it was generated from `saltare-machina/ci/core.sh` + `ci/repos/saltare-cli.sh`,
+but that directory is outside every repository and under no version control, so
+it is not this repo's source of truth. Edit `bin/ci` here. Its Swift helpers
+(`swift_do`, the `swift:6.0` container fallback) are inert in this repo — there
+is no Swift in it — and matter in the mobile repos that share the script.
 
 Against a local server: from `../saltare`, `bin/rails server`, then
 `./sal login --server http://localhost:3000`.
