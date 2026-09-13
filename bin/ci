@@ -121,6 +121,56 @@ needs_macos() {
 
 have() { command -v "$1" >/dev/null 2>&1; }
 
+# ----------------------------------------------------------------- swift ---
+#
+# Swift on a Linux workstation, three ways down: a native toolchain if one is
+# installed, else the same image GitHub's Linux Swift job uses, else a visible
+# skip. swift.org publishes no Arch tarball, so the container is the realistic
+# path here — and it is the *same* container, which is the point.
+#
+#   sudo systemctl enable --now docker
+#   sudo usermod -aG docker "$USER"   # then re-login, or: newgrp docker
+
+SWIFT_IMAGE=${SWIFT_IMAGE:-swift:6.0}
+
+docker_usable() { have docker && docker info >/dev/null 2>&1; }
+
+swift_mode() {
+  if have swift; then echo native
+  elif docker_usable; then echo docker
+  else echo none
+  fi
+}
+
+# Why it is unavailable, phrased as what to do about it.
+swift_missing_reason() {
+  if ! have docker; then
+    echo "no swift toolchain and no docker"
+  elif ! docker info >/dev/null 2>&1; then
+    echo "no swift toolchain; docker unreachable (systemctl start docker, usermod -aG docker)"
+  else
+    echo "no swift toolchain"
+  fi
+}
+
+# swift_do test --package-path ios/Packages/XKit
+#
+# Runs as the invoking user so .build does not come back owned by root, with
+# HOME redirected because that user has none inside the image.
+swift_do() {
+  case $(swift_mode) in
+    native) swift "$@" ;;
+    docker)
+      docker run --rm \
+        --user "$(id -u):$(id -g)" \
+        -e HOME=/tmp \
+        -v "$PWD:/work" -w /work \
+        "$SWIFT_IMAGE" swift "$@"
+      ;;
+    *) echo "no way to run swift here: $(swift_missing_reason)" >&2; return 127 ;;
+  esac
+}
+
 # ---------------------------------------------------------------- remote ---
 
 remote() {
