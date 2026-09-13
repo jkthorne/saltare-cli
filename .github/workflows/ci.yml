@@ -1,31 +1,33 @@
 name: CI
 
+# Dispatch-only, deliberately. Every step in this repo runs on Linux, which is
+# to say it runs on the workstation — `bin/ci` before a push is the real gate
+# (`bin/ci --install-hook` wires it to `git push`). This workflow is the
+# clean-machine second opinion, asked for with `bin/ci --remote`.
 on:
-  pull_request:
-  push:
-    branches: [ master ]
+  workflow_dispatch:
+    inputs:
+      tier:
+        description: Which tier to run
+        type: choice
+        default: all
+        options: [all, linux]
 
 jobs:
   go:
+    if: inputs.tier == 'all' || inputs.tier == 'linux'
     runs-on: ubuntu-latest
     steps:
       - name: Checkout code
         uses: actions/checkout@v6
 
+      # The job sets up the environment; bin/ci owns the steps. Anything added
+      # here that is not environment belongs in saltare-machina's
+      # ci/repos/saltare-cli.sh instead, or the two gates drift.
       - name: Set up Go
         uses: actions/setup-go@v7
         with:
           go-version-file: go.mod
           cache-dependency-path: go.sum
 
-      - name: Verify formatting
-        run: test -z "$(gofmt -l .)"
-
-      - name: Vet
-        run: go vet ./...
-
-      - name: Build
-        run: go build ./...
-
-      - name: Test
-        run: go test ./...
+      - run: bin/ci --tier linux

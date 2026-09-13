@@ -23,7 +23,18 @@ go vet ./...
 go test ./...
 go test ./internal/ui/ -run TestSidebar   # one test
 gofmt -l .                 # must print nothing; CI enforces
+bin/ci                     # all four of the above, as CI runs them
 ```
+
+`bin/ci` is the gate and it runs here: every step this repo has is Linux-shaped,
+so the local run is a complete substitute for the remote one, not an
+approximation. **GitHub CI is dispatch-only** — it no longer runs on push. Ask
+for a clean-machine second opinion with `bin/ci --remote`;
+`bin/ci --install-hook` puts the run on `git push`. `release.yml` is unchanged
+and still fires on a `v*` tag. `bin/ci` is generated from
+`saltare-machina/ci/core.sh` + `ci/repos/saltare-cli.sh` — edit those and run
+`bin/sync-ci saltare-cli`, never `bin/ci` itself. `mise.toml` pins the Go
+toolchain local CI uses, mirroring the workflow's `go-version-file: go.mod`.
 
 Against a local server: from `../saltare`, `bin/rails server`, then
 `./sal login --server http://localhost:3000`.

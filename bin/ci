@@ -1,0 +1,312 @@
+#!/usr/bin/env bash
+#
+# Local CI for saltare-cli. GENERATED — do not edit.
+#
+# Source: saltare-machina's ci/core.sh + ci/repos/saltare-cli.sh.
+# Edit there and run `bin/sync-ci saltare-cli`; `bin/sync-ci --check` fails if this
+# file has drifted.
+#
+# The steps below are the ones .github/workflows/ci.yml runs — that workflow
+# calls this script. GitHub CI is dispatch-only; ask for it with `bin/ci --remote`.
+#
+# The shared half of every bin/ci in the fleet: argument parsing, the step
+# runner, the summary, and the two escape hatches (--remote, --install-hook).
+#
+# Steps are NOT here. Each repo's steps live in saltare-machina's
+# ci/repos/<repo>.sh (or a .conf feeding ci/mobile.sh), and bin/sync-ci renders
+# core + steps into the repo's bin/ci.
+
+set -uo pipefail
+
+cd "$(dirname "${BASH_SOURCE[0]}")/.." || exit 1
+
+if [ -t 1 ] && [ -z "${NO_COLOR:-}" ]; then
+  BOLD=$'\e[1m'; RED=$'\e[31m'; GREEN=$'\e[32m'; YELLOW=$'\e[33m'
+  BLUE=$'\e[34m'; DIM=$'\e[2m'; RESET=$'\e[0m'
+else
+  BOLD=; RED=; GREEN=; YELLOW=; BLUE=; DIM=; RESET=
+fi
+
+die()  { printf '%sci: %s%s\n' "$RED" "$*" "$RESET" >&2; exit 1; }
+warn() { printf '%sci: %s%s\n' "$YELLOW" "$*" "$RESET" >&2; }
+note() { printf '%s%s%s\n' "$DIM" "$*" "$RESET"; }
+
+# ----------------------------------------------------------------- steps ---
+
+CI_RESULTS=()
+CI_FAILED=0
+CI_STARTED=$SECONDS
+
+# step "Name" cmd args...
+#
+# Runs the command, records the outcome, and keeps going. Collect-then-report
+# rather than fail-fast: one run should tell you everything that is broken, not
+# just the first thing. CI_FAIL_FAST=1 (or --fail-fast) restores the other
+# behaviour for the pre-push hook, where you only want to know *whether* to push.
+step() {
+  local name=$1; shift
+  local start=$SECONDS code
+
+  if [ "$CI_LIST" = 1 ]; then
+    printf '  %-46s %s%s%s\n' "$name" "$DIM" "$*" "$RESET"
+    return 0
+  fi
+
+  printf '\n%s══ %s%s\n' "$BOLD" "$name" "$RESET"
+  note "\$ $*"
+  [ -n "${GITHUB_ACTIONS:-}" ] && echo "::group::$name"
+
+  "$@"
+  code=$?
+
+  [ -n "${GITHUB_ACTIONS:-}" ] && echo "::endgroup::"
+
+  if [ $code -eq 0 ]; then
+    CI_RESULTS+=("ok|$name|$((SECONDS - start))|0")
+  else
+    CI_RESULTS+=("fail|$name|$((SECONDS - start))|$code")
+    CI_FAILED=1
+    [ -n "${GITHUB_ACTIONS:-}" ] && echo "::error::$name failed (exit $code)"
+    if [ "$CI_FAIL_FAST" = 1 ]; then
+      summary
+      exit 1
+    fi
+  fi
+  return 0
+}
+
+# Record a step that could not run here, without failing the run. Used for the
+# macOS tier on a Linux box: a skip you can see beats a gap you cannot.
+skip() {
+  local name=$1 why=$2
+  if [ "$CI_LIST" = 1 ]; then
+    printf '  %-46s %s(%s)%s\n' "$name" "$DIM" "$why" "$RESET"
+    return 0
+  fi
+  printf '\n%s══ %s%s %s(skipped: %s)%s\n' "$BOLD" "$name" "$RESET" "$DIM" "$why" "$RESET"
+  CI_RESULTS+=("skip|$name|0|$why")
+}
+
+summary() {
+  local status name elapsed extra total=$((SECONDS - CI_STARTED)) skipped=0
+
+  printf '\n%s── %s ─────────────────────────────────────────%s\n' "$BOLD" "$CI_REPO" "$RESET"
+  for result in "${CI_RESULTS[@]}"; do
+    IFS='|' read -r status name elapsed extra <<<"$result"
+    case $status in
+      ok)   printf '  %s✓%s %-44s %4ss\n' "$GREEN" "$RESET" "$name" "$elapsed" ;;
+      fail) printf '  %s✗%s %-44s %4ss  %sexit %s%s\n' "$RED" "$RESET" "$name" "$elapsed" "$RED" "$extra" "$RESET" ;;
+      skip) printf '  %s·%s %-44s       %s%s%s\n' "$YELLOW" "$RESET" "$name" "$DIM" "$extra" "$RESET"; skipped=$((skipped + 1)) ;;
+    esac
+  done
+
+  if [ $CI_FAILED = 1 ]; then
+    printf '\n%s✗ %s CI failed%s in %ss\n' "$RED$BOLD" "$CI_REPO" "$RESET" "$total"
+  elif [ $skipped -gt 0 ]; then
+    printf '\n%s✓ %s CI passed%s in %ss %s(%s step(s) skipped)%s\n' "$GREEN$BOLD" "$CI_REPO" "$RESET" "$total" "$DIM" "$skipped" "$RESET"
+  else
+    printf '\n%s✓ %s CI passed%s in %ss\n' "$GREEN$BOLD" "$CI_REPO" "$RESET" "$total"
+  fi
+}
+
+# A tier that needs a Mac. Explicitly asking for it here is an error; sweeping
+# it up in --tier all is a skip.
+needs_macos() {
+  [ "$(uname -s)" = Darwin ] && return 0
+  if [ "$CI_TIER_EXPLICIT" = 1 ]; then
+    die "the mac tier needs macOS and Xcode; this is $(uname -s). Run it on GitHub: bin/ci --remote --tier mac"
+  fi
+  return 1
+}
+
+have() { command -v "$1" >/dev/null 2>&1; }
+
+# ---------------------------------------------------------------- remote ---
+
+remote() {
+  have gh || die "the GitHub CLI (gh) is not installed"
+
+  local branch remote_sha local_sha ahead run_id
+  branch=$(git rev-parse --abbrev-ref HEAD)
+
+  # A dispatch runs against the ref as GitHub has it. Testing a commit you have
+  # not pushed is the classic way to read a green tick for the wrong tree.
+  ahead=$(git rev-list --count "@{u}..HEAD" 2>/dev/null || echo 0)
+  if [ "$ahead" != 0 ]; then
+    warn "$ahead commit(s) on $branch are not pushed — the run will test what GitHub has, not what you have"
+  fi
+  if [ -n "$(git status --porcelain)" ]; then
+    warn "the working tree is dirty — those changes are not in the run either"
+  fi
+
+  printf '%sdispatching ci.yml (tier: %s) on %s%s\n' "$BLUE" "$CI_TIER" "$branch" "$RESET"
+  gh workflow run ci.yml --ref "$branch" -f tier="$CI_TIER" || die "dispatch failed"
+
+  # `gh workflow run` prints nothing useful, so find the run it just queued.
+  # The queue is not instant; poll rather than sleep-and-hope.
+  for _ in 1 2 3 4 5 6 7 8 9 10; do
+    sleep 2
+    run_id=$(gh run list --workflow=ci.yml --branch "$branch" --limit 1 --json databaseId,status \
+      --jq '.[] | select(.status != "completed") | .databaseId' 2>/dev/null | head -1)
+    [ -n "$run_id" ] && break
+  done
+
+  if [ -z "$run_id" ]; then
+    warn "dispatched, but could not find the run — check: gh run list --workflow=ci.yml"
+    return 0
+  fi
+  exec gh run watch "$run_id" --exit-status
+}
+
+# ------------------------------------------------------------------ hook ---
+
+install_hook() {
+  local hook
+  hook=$(git rev-parse --git-path hooks/pre-push) || die "not a git repository"
+  mkdir -p "$(dirname "$hook")"
+
+  if [ -e "$hook" ] && ! grep -q 'saltare-machina local CI' "$hook"; then
+    die "$hook already exists and is not ours — move it aside first"
+  fi
+
+  cat > "$hook" <<'HOOK'
+#!/usr/bin/env bash
+# saltare-machina local CI — installed by bin/ci --install-hook.
+#
+# GitHub CI no longer runs on push, so this is the gate. Bypass it with
+# `git push --no-verify`, or SKIP_CI=1 git push.
+[ -n "${SKIP_CI:-}" ] && exit 0
+exec "$(git rev-parse --show-toplevel)/bin/ci" --fail-fast
+HOOK
+
+  chmod +x "$hook"
+  printf '%s✓%s pre-push hook installed at %s\n' "$GREEN" "$RESET" "$hook"
+  note "bypass with: git push --no-verify   (or SKIP_CI=1 git push)"
+}
+
+uninstall_hook() {
+  local hook
+  hook=$(git rev-parse --git-path hooks/pre-push) || die "not a git repository"
+  if [ ! -e "$hook" ]; then
+    note "no pre-push hook to remove"
+  elif grep -q 'saltare-machina local CI' "$hook"; then
+    rm "$hook"
+    printf '%s✓%s pre-push hook removed\n' "$GREEN" "$RESET"
+  else
+    die "$hook was not installed by us — leaving it alone"
+  fi
+}
+
+# ------------------------------------------------------------------ args ---
+
+usage() {
+  cat <<USAGE
+${BOLD}bin/ci${RESET} — local CI for ${BOLD}$CI_REPO${RESET}
+
+The steps here are the same ones .github/workflows/ci.yml runs; that workflow
+calls this script, so the two cannot drift. GitHub CI is dispatch-only — it
+does not run on push. Ask for it with --remote.
+
+  ${BOLD}Usage${RESET}
+    bin/ci [--tier ${CI_TIERS// /|}|all] [options]
+
+  ${BOLD}Options${RESET}
+    -t, --tier TIER    which half to run (default: $CI_DEFAULT_TIER; this repo has: $CI_TIERS)
+    -r, --remote       dispatch ci.yml on GitHub and watch it, instead of running here
+    -f, --fail-fast    stop at the first failure (the pre-push hook uses this)
+    -l, --list         list the steps for the tier and exit
+        --install-hook gate \`git push\` on a green run
+        --uninstall-hook  remove that hook
+    -h, --help         this
+USAGE
+  [ -n "${CI_EXTRA_HELP:-}" ] && printf '\n%s\n' "$CI_EXTRA_HELP"
+}
+
+CI_TIER=
+CI_TIER_EXPLICIT=0
+CI_FAIL_FAST=0
+CI_LIST=0
+CI_REMOTE=0
+
+parse_args() {
+  while [ $# -gt 0 ]; do
+    case $1 in
+      -t|--tier)      CI_TIER=${2:-}; CI_TIER_EXPLICIT=1; shift 2 ;;
+      --tier=*)       CI_TIER=${1#*=}; CI_TIER_EXPLICIT=1; shift ;;
+      -r|--remote)    CI_REMOTE=1; shift ;;
+      -f|--fail-fast) CI_FAIL_FAST=1; shift ;;
+      -l|--list)      CI_LIST=1; shift ;;
+      --install-hook) install_hook; exit 0 ;;
+      --uninstall-hook) uninstall_hook; exit 0 ;;
+      -h|--help)      usage; exit 0 ;;
+      *)
+        if declare -F ci_parse_arg >/dev/null && ci_parse_arg "$1"; then shift; continue; fi
+        die "unknown option: $1 (try --help)"
+        ;;
+    esac
+  done
+
+  : "${CI_TIER:=$CI_DEFAULT_TIER}"
+
+  if [ "$CI_TIER" != all ] && ! printf '%s\n' $CI_TIERS | grep -qx "$CI_TIER"; then
+    die "no '$CI_TIER' tier in $CI_REPO (it has: $CI_TIERS)"
+  fi
+}
+
+main() {
+  parse_args "$@"
+
+  [ "$CI_REMOTE" = 1 ] && remote
+
+  local ran=0
+  for tier in $CI_TIERS; do
+    [ "$CI_TIER" = all ] || [ "$CI_TIER" = "$tier" ] || continue
+    if [ "$CI_LIST" = 1 ]; then
+      printf '%s%s tier:%s\n' "$BOLD" "$tier" "$RESET"
+      "tier_$tier"
+      ran=1
+      continue
+    fi
+    "tier_$tier"
+    ran=1
+  done
+
+  [ "$ran" = 1 ] || die "nothing to run for tier '$CI_TIER'"
+  [ "$CI_LIST" = 1 ] && exit 0
+
+  summary
+  exit $CI_FAILED
+}
+
+#
+# saltare-cli: one Go module, all of it Linux. Nothing here needs a Mac — the
+# darwin builds are goreleaser's job at release time, cross-compiled.
+
+CI_REPO=saltare-cli
+CI_TIERS="linux"
+CI_DEFAULT_TIER=linux
+
+tier_linux() {
+  step "Format" gofmt_check
+  step "Vet" go vet ./...
+  step "Build" go build ./...
+  step "Test" go test ./...
+}
+
+# `gofmt -l` exits 0 whether or not it printed anything, so the check is the
+# emptiness of its output. Which means a gofmt that failed to run at all also
+# prints nothing and would read as a pass — hence the status check first.
+gofmt_check() {
+  local unformatted status
+  have gofmt || { echo "gofmt is not on PATH" >&2; return 1; }
+  unformatted=$(gofmt -l .)
+  status=$?
+  [ $status -eq 0 ] || { echo "gofmt exited $status" >&2; return $status; }
+  [ -z "$unformatted" ] && return 0
+  echo "these files are not gofmt'd:" >&2
+  printf '  %s\n' $unformatted >&2
+  echo "fix with: gofmt -w ." >&2
+  return 1
+}
+
+main "$@"

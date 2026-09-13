@@ -1,0 +1,5 @@
+# Pins the toolchain local CI runs on. GitHub's job reads `go-version-file:
+# go.mod`; mise stopped reading go.mod's `go` directive (it is a minimum, not a
+# pin), so the version lives here as well. Keep the two in step.
+[tools]
+go = "1.26.5"
