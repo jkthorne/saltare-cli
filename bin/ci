@@ -35,6 +35,7 @@ note() { printf '%s%s%s\n' "$DIM" "$*" "$RESET"; }
 
 CI_RESULTS=()
 CI_FAILED=0
+CI_SKIPPED_TIERS=
 CI_STARTED=$SECONDS
 
 # step "Name" cmd args...
@@ -88,7 +89,7 @@ skip() {
 }
 
 summary() {
-  local status name elapsed extra total=$((SECONDS - CI_STARTED)) skipped=0
+  local status name elapsed extra tier total=$((SECONDS - CI_STARTED)) skipped=0
 
   printf '\n%s── %s ─────────────────────────────────────────%s\n' "$BOLD" "$CI_REPO" "$RESET"
   for result in "${CI_RESULTS[@]}"; do
@@ -100,8 +101,16 @@ summary() {
     esac
   done
 
+  for tier in $CI_SKIPPED_TIERS; do
+    printf '  %s·%s %-44s       %snot run — bin/ci --tier %s%s\n' "$YELLOW" "$RESET" "$tier tier" "$DIM" "$tier" "$RESET"
+  done
+
   if [ $CI_FAILED = 1 ]; then
     printf '\n%s✗ %s CI failed%s in %ss\n' "$RED$BOLD" "$CI_REPO" "$RESET" "$total"
+  elif [ $skipped = ${#CI_RESULTS[@]} ] && [ $skipped -gt 0 ]; then
+    # Nothing ran. That is not a pass, and calling it one is how a repo ends up
+    # with a green history and no evidence behind it.
+    printf '\n%s· %s: nothing could run on this machine%s\n' "$YELLOW$BOLD" "$CI_REPO" "$RESET"
   elif [ $skipped -gt 0 ]; then
     printf '\n%s✓ %s CI passed%s in %ss %s(%s step(s) skipped)%s\n' "$GREEN$BOLD" "$CI_REPO" "$RESET" "$total" "$DIM" "$skipped" "$RESET"
   else
@@ -205,7 +214,23 @@ remote() {
     warn "dispatched, but could not find the run — check: gh run list --workflow=ci.yml"
     return 0
   fi
-  exec gh run watch "$run_id" --exit-status
+
+  gh run watch "$run_id" --exit-status
+  local status=$?
+  [ $status -eq 0 ] && exit 0
+
+  # A run that dies in seconds without executing a step is almost never the
+  # code. The annotation says which of the two usual reasons it was.
+  local annotations
+  annotations=$(gh run view "$run_id" --json jobs \
+    --jq '.jobs[].steps[]? | select(.conclusion == "failure") | .name' 2>/dev/null)
+  if [ -z "$annotations" ]; then
+    warn "no step failed — the jobs may not have started at all. Check:"
+    warn "  gh run view $run_id"
+    warn "(GitHub blocks job starts when billing needs attention, and reports it"
+    warn " as an annotation rather than as a step failure.)"
+  fi
+  exit $status
 }
 
 # ------------------------------------------------------------------ hook ---
@@ -226,7 +251,7 @@ install_hook() {
 # GitHub CI no longer runs on push, so this is the gate. Bypass it with
 # `git push --no-verify`, or SKIP_CI=1 git push.
 [ -n "${SKIP_CI:-}" ] && exit 0
-exec "$(git rev-parse --show-toplevel)/bin/ci" --fail-fast
+exec "$(git rev-parse --show-toplevel)/bin/ci" --hook
 HOOK
 
   chmod +x "$hook"
@@ -263,7 +288,7 @@ does not run on push. Ask for it with --remote.
   ${BOLD}Options${RESET}
     -t, --tier TIER    which half to run (default: $CI_DEFAULT_TIER; this repo has: $CI_TIERS)
     -r, --remote       dispatch ci.yml on GitHub and watch it, instead of running here
-    -f, --fail-fast    stop at the first failure (the pre-push hook uses this)
+    -f, --fail-fast    stop at the first failure
     -l, --list         list the steps for the tier and exit
         --install-hook gate \`git push\` on a green run
         --uninstall-hook  remove that hook
@@ -285,6 +310,10 @@ parse_args() {
       --tier=*)       CI_TIER=${1#*=}; CI_TIER_EXPLICIT=1; shift ;;
       -r|--remote)    CI_REMOTE=1; shift ;;
       -f|--fail-fast) CI_FAIL_FAST=1; shift ;;
+      # What the pre-push hook runs. Fail-fast, because the only question there
+      # is whether to push — and whichever tier the repo nominates as the one
+      # worth blocking a push on, which is not always the full default.
+      --hook) CI_FAIL_FAST=1; CI_TIER=${CI_HOOK_TIER:-$CI_DEFAULT_TIER}; shift ;;
       -l|--list)      CI_LIST=1; shift ;;
       --install-hook) install_hook; exit 0 ;;
       --uninstall-hook) uninstall_hook; exit 0 ;;
@@ -310,11 +339,26 @@ main() {
 
   local ran=0
   for tier in $CI_TIERS; do
-    [ "$CI_TIER" = all ] || [ "$CI_TIER" = "$tier" ] || continue
+    local optional=
+    printf '%s\n' ${CI_OPTIONAL_TIERS:-} | grep -qx "$tier" && optional=" (optional)"
+
     if [ "$CI_LIST" = 1 ]; then
-      printf '%s%s tier:%s\n' "$BOLD" "$tier" "$RESET"
+      # --list is an inventory: it shows the optional tiers too, labelled.
+      [ "$CI_TIER" = all ] || [ "$CI_TIER" = "$tier" ] || continue
+      printf '%s%s tier%s:%s\n' "$BOLD" "$tier" "$optional" "$RESET"
       "tier_$tier"
       ran=1
+      continue
+    fi
+
+    if [ "$CI_TIER" = all ]; then
+      # Tiers that cost real time and answer a question you are not usually
+      # asking. `all` leaves them out; naming one runs it.
+      if [ -n "$optional" ]; then
+        CI_SKIPPED_TIERS="$CI_SKIPPED_TIERS $tier"
+        continue
+      fi
+    elif [ "$CI_TIER" != "$tier" ]; then
       continue
     fi
     "tier_$tier"
