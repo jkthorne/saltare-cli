@@ -216,7 +216,23 @@ mouse support is additive, so a terminal that doesn't report events (or an
 - **Composer**: click it to take focus back from the feed.
 - **Home**: click any dashboard row — an unread channel, a due task, the
   notification count.
+- **List panes**: click a task to open its detail, a document to read it, a
+  table to open its grid. Files moves the cursor and stops, because `enter`
+  does nothing there — the row under the cursor is what `d`/`x`/`y` act on.
+- **Database grid**: click a row to select it, click it again to open it —
+  the feed's bargain, because the grid cursor drives `y` and `o` too.
+- **Overlays**: the palette, search, the inbox, attach and the two pickers are
+  all pickers, so a click runs the row. The input keeps focus, so you can go on
+  typing to narrow the list.
+- **Status bar**: click a key hint to press the key it names. `ctrl+c quit` is
+  a label only — it is the one hint with no undo.
 - **Wheel**: scrolls the chat feed, the document reader, and the database grid.
+
+Two shapes, one rule: where a row is a link, one click follows it; where the
+selection is state other keys read, a click sets it and a second click acts. A
+click also only ever lands where the keyboard cursor already is — a pane whose
+keys have gone to a prompt or a `y/n` confirmation ignores clicks rather than
+doing something the keyboard can't.
 
 **The cost, and the escape hatch.** With mouse tracking on, the terminal stops
 handling click-drag text selection itself. Most terminals give it back if you
@@ -229,8 +245,7 @@ would rather not trade it at all:
 - The palette (`ctrl+k` → "mouse: on/off") toggles it mid-session, for when you
   just need to drag-select one stack trace.
 
-Not wired yet: the tasks/documents/files/database *list* panes, modal overlays
-(palette, search, inbox), the status bar, right-click menus, and drag.
+Not wired yet: right-click menus and drag.
 
 ## Hyperlinks
 
