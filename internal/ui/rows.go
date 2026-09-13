@@ -98,3 +98,13 @@ func (b *rowBuilder) slice(off, n int) *rowBuilder {
 }
 
 func (b *rowBuilder) join() string { return strings.Join(b.lines, "\n") }
+
+// pickerLine is the list-row idiom every pane shares: a cursor marker, the
+// label truncated to the pane, and the selected/unselected style. The width
+// budget (6) covers the pane's own padding plus the marker.
+func pickerLine(label string, selected bool, width int) string {
+	if selected {
+		return stylePickerSel.Render("▸ " + truncate(label, width-6))
+	}
+	return stylePickerRow.Render("  " + truncate(label, width-6))
+}

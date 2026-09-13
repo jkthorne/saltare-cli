@@ -71,16 +71,22 @@ func (f *filesView) setList(uploads []api.Upload) (found bool) {
 }
 
 func (f *filesView) render(width, height int) string {
-	var rows []string
-	rows = append(rows, stylePickerTitle.Render("⇱ files"), "")
+	body := f.listLines(width).join()
+	return styleTasksPane.Width(width).Height(height).MaxHeight(height).Render(body)
+}
+
+// listLines lays the cabinet out, tagging each line with its index into f.list.
+func (f *filesView) listLines(width int) *rowBuilder {
+	b := &rowBuilder{}
+	b.chrome(stylePickerTitle.Render("⇱ files"), "")
 	if f.inputOpen {
-		rows = append(rows, f.input.View(), "")
+		b.chrome(f.input.View(), "")
 	}
 	switch {
 	case f.loading:
-		rows = append(rows, styleFeedTopic.Render("loading…"))
+		b.chrome(styleFeedTopic.Render("loading…"))
 	case len(f.list) == 0:
-		rows = append(rows, styleFeedTopic.Render("no uploads yet — u uploads a file"))
+		b.chrome(styleFeedTopic.Render("no uploads yet — u uploads a file"))
 	}
 	for i, u := range f.list {
 		category := "pending"
@@ -88,14 +94,10 @@ func (f *filesView) render(width, height int) string {
 			category = *u.Category
 		}
 		label := u.Slug + "  " + styleFeedTopic.Render(category+" · "+tablefmt.HumanSize(u.FileSize)) + "  " + u.Title
-		if i == f.sel {
-			rows = append(rows, stylePickerSel.Render("▸ "+truncate(label, width-6)))
-		} else {
-			rows = append(rows, stylePickerRow.Render("  "+truncate(label, width-6)))
-		}
+		b.row(pickerLine(label, i == f.sel, width), i)
 	}
-	rows = append(rows, "", styleFeedTopic.Render("d download · u upload · x delete · y copy embed · r refresh · esc back"))
-	return styleTasksPane.Width(width).Height(height).MaxHeight(height).Render(strings.Join(rows, "\n"))
+	b.chrome("", styleFeedTopic.Render("d download · u upload · x delete · y copy embed · r refresh · esc back"))
+	return b
 }
 
 // expandHome resolves a leading ~/ in a typed upload path.

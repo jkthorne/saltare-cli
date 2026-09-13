@@ -165,7 +165,16 @@ func (t *tasksView) render(r *feedRenderer, width, height int) string {
 	if t.detail != nil {
 		return t.renderDetail(r, width, height)
 	}
+	body := t.listLines(width).join()
+	return styleTasksPane.Width(width).Height(height).MaxHeight(height).Render(body)
+}
 
+// listLines lays the pane out, tagging each line with the item it draws. The
+// item space follows the cursor: while the new-task project picker is up the
+// rows are projects (pickSel), in agenda mode they index t.rows, and otherwise
+// t.tasks — the same three spaces move() switches between, so a click lands
+// where the keyboard would.
+func (t *tasksView) listLines(width int) *rowBuilder {
 	scope := "mine"
 	if !t.mine {
 		scope = "all"
@@ -174,43 +183,38 @@ func (t *tasksView) render(r *feedRenderer, width, height int) string {
 	if t.agenda {
 		title = "☑ agenda — next 7 days"
 	}
-	var rows []string
-	rows = append(rows, stylePickerTitle.Render(title))
-	rows = append(rows, "")
+	b := &rowBuilder{}
+	b.chrome(stylePickerTitle.Render(title), "")
 
 	switch {
 	case t.inputOpen && t.pickOpen:
-		rows = append(rows, styleFeedTopic.Render("project for: "+t.pendingTitle), "")
+		b.chrome(styleFeedTopic.Render("project for: "+t.pendingTitle), "")
 		for i, p := range t.projects {
 			label := fmt.Sprintf("%s  ·  %d active", p.Name, p.ActiveTasksCount)
-			if i == t.pickSel {
-				rows = append(rows, stylePickerSel.Render("▸ "+truncate(label, width-6)))
-			} else {
-				rows = append(rows, stylePickerRow.Render("  "+truncate(label, width-6)))
-			}
+			b.row(pickerLine(label, i == t.pickSel, width), i)
 		}
-		rows = append(rows, "", styleFeedTopic.Render("enter create · esc cancel"))
+		b.chrome("", styleFeedTopic.Render("enter create · esc cancel"))
 	case t.inputOpen:
-		rows = append(rows, t.input.View(), "", styleFeedTopic.Render("enter next · esc cancel"))
+		b.chrome(t.input.View(), "", styleFeedTopic.Render("enter next · esc cancel"))
 	case t.loading:
-		rows = append(rows, styleFeedTopic.Render("loading…"))
+		b.chrome(styleFeedTopic.Render("loading…"))
 	case t.agenda && len(t.rows) == 0:
-		rows = append(rows, styleFeedTopic.Render("nothing due in the next 7 days"))
+		b.chrome(styleFeedTopic.Render("nothing due in the next 7 days"))
 	case t.agenda:
 		today := time.Now().Format("2006-01-02")
 		for i, row := range t.rows {
 			if row.header != "" {
-				rows = append(rows, styleFeedTopic.Render(row.header))
+				b.chrome(styleFeedTopic.Render(row.header))
 			} else {
-				rows = append(rows, t.taskRow(*row.task, i == t.sel, today, width))
+				b.row(t.taskRow(*row.task, i == t.sel, today, width), i)
 			}
 		}
 	case len(t.tasks) == 0:
-		rows = append(rows, styleFeedTopic.Render("nothing here — n creates a task"))
+		b.chrome(styleFeedTopic.Render("nothing here — n creates a task"))
 	default:
 		today := time.Now().Format("2006-01-02")
 		for i, task := range t.tasks {
-			rows = append(rows, t.taskRow(task, i == t.sel, today, width))
+			b.row(t.taskRow(task, i == t.sel, today, width), i)
 		}
 	}
 
@@ -218,9 +222,8 @@ func (t *tasksView) render(r *feedRenderer, width, height int) string {
 	if t.agenda {
 		hints = "j/k move · enter detail · x done/reopen · n new · r refresh · esc chat"
 	}
-	rows = append(rows, "", styleFeedTopic.Render(hints))
-	body := strings.Join(rows, "\n")
-	return styleTasksPane.Width(width).Height(height).MaxHeight(height).Render(body)
+	b.chrome("", styleFeedTopic.Render(hints))
+	return b
 }
 
 // renderDetail mirrors the web task page hierarchy: title, state facts,

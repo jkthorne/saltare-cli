@@ -11,8 +11,15 @@ import tea "github.com/charmbracelet/bubbletea"
 // with tracking on in most terminals.
 //
 // Wired here: wheel scrolling, sidebar rows, chat message selection, composer
-// focus, and home dashboard rows. Not yet: the other list panes, the status bar,
-// modal overlays, right-click menus, and drag.
+// focus, home dashboard rows, and the tasks/documents/files/database list panes.
+// Not yet: the status bar, modal overlays, right-click menus, and drag.
+//
+// One rule decides where a click may land: it acts only where the keyboard
+// cursor currently is. A pane whose keys have been handed to a prompt (the
+// new-document title, the upload path, a cell editor) or to a y/n confirmation
+// has no cursor over its rows, so clicks there are inert rather than doing
+// something the keyboard can't. The new-task project picker is the one prompt
+// whose rows *are* the cursor, and it stays clickable.
 
 // wheelLines is how far one wheel notch moves a cursor-based list. The viewport
 // has its own MouseWheelDelta (3) for the surfaces it scrolls itself.
@@ -93,6 +100,122 @@ func (m Model) handleClick(msg tea.MouseMsg) (tea.Model, tea.Cmd) {
 		return m.clickHome(msg.Y)
 	case viewChat:
 		return m.clickChat(msg)
+	case viewTasks:
+		return m.clickTasks(msg.Y)
+	case viewDocs:
+		return m.clickDocs(msg.Y)
+	case viewFiles:
+		return m.clickFiles(msg.Y)
+	case viewDB:
+		return m.clickDB(msg.Y)
+	}
+	return m, nil
+}
+
+// paneItemAt maps a screen row to the item a list pane draws there, or noTarget.
+// The builder is rebuilt from live view state rather than cached from the last
+// frame, for the same reason the sidebar's is: a fetch landing between the
+// render and the click would leave a cached map describing rows that are gone.
+func (m Model) paneItemAt(b *rowBuilder, y int) int {
+	return b.target(y - m.rects.pane.y - panePadTop)
+}
+
+// clickTasks opens the clicked task's detail, which is what enter does. While
+// the new-task project picker is up the rows are projects, and clicking one
+// picks it and creates the task — again the only thing enter does there.
+func (m Model) clickTasks(y int) (tea.Model, tea.Cmd) {
+	t := &m.tasks
+	// The detail pane draws facts and prose, not rows; the title prompt owns
+	// the keys.
+	if t.detail != nil || (t.inputOpen && !t.pickOpen) {
+		return m, nil
+	}
+	idx := m.paneItemAt(t.listLines(m.rects.pane.w), y)
+	if idx == noTarget {
+		return m, nil
+	}
+	if t.pickOpen {
+		if idx >= len(t.projects) {
+			return m, nil
+		}
+		t.pickSel = idx
+		project := t.projects[idx]
+		title := t.pendingTitle
+		t.closeInput()
+		return m, m.createTask(project.ID, title)
+	}
+	if t.agenda {
+		if idx >= len(t.rows) || !t.rows[idx].selectable() {
+			return m, nil
+		}
+	} else if idx >= len(t.tasks) {
+		return m, nil
+	}
+	t.sel = idx
+	if task, ok := t.selected(); ok {
+		selected := task
+		t.detail = &selected
+	}
+	return m, nil
+}
+
+// clickDocs opens the clicked document in the reader, which is what enter does.
+func (m Model) clickDocs(y int) (tea.Model, tea.Cmd) {
+	d := &m.docs
+	// The reader scrolls on the wheel and has no rows; the conflict prompt and
+	// the new-document title own the keys while they are up.
+	if d.viewing != nil || d.conflict != nil || d.inputOpen {
+		return m, nil
+	}
+	idx := m.paneItemAt(d.listLines(m.rects.pane.w), y)
+	if idx == noTarget || idx >= len(d.list) {
+		return m, nil
+	}
+	d.sel = idx
+	doc := d.list[idx]
+	d.loading = true
+	return m, m.fetchDocument(doc.Slug, false)
+}
+
+// clickFiles moves the cursor only. Nothing here activates on enter — the row
+// under the cursor is what d/x/y act on — so a click that opened something
+// would be inventing an action the keyboard doesn't have.
+func (m Model) clickFiles(y int) (tea.Model, tea.Cmd) {
+	f := &m.files
+	if f.inputOpen || f.confirmRm != nil {
+		return m, nil
+	}
+	idx := m.paneItemAt(f.listLines(m.rects.pane.w), y)
+	if idx == noTarget || idx >= len(f.list) {
+		return m, nil
+	}
+	f.sel = idx
+	return m, nil
+}
+
+// clickDB opens the clicked table (enter) from the list, and moves the field
+// cursor in a row detail — where enter opens a cell editor, which is a prompt a
+// stray click shouldn't put you inside.
+func (m Model) clickDB(y int) (tea.Model, tea.Cmd) {
+	d := &m.db
+	switch d.level {
+	case dbLevelList:
+		idx := m.paneItemAt(d.listLines(m.rects.pane.w), y)
+		if idx == noTarget || idx >= len(d.list) {
+			return m, nil
+		}
+		d.sel = idx
+		return m.openDBGrid(d.list[idx].Slug)
+	case dbLevelDetail:
+		row := d.currentRow()
+		if row == nil || d.database == nil || d.editOpen {
+			return m, nil
+		}
+		idx := m.paneItemAt(d.detailLines(row, m.rects.pane.w), y)
+		if idx == noTarget || idx >= len(d.columns()) {
+			return m, nil
+		}
+		d.fieldSel = idx
 	}
 	return m, nil
 }

@@ -2,7 +2,6 @@ package ui
 
 import (
 	"fmt"
-	"strings"
 
 	"github.com/charmbracelet/bubbles/table"
 	"github.com/charmbracelet/bubbles/textinput"
@@ -177,24 +176,27 @@ func (d *dbView) render(width, height int) string {
 }
 
 func (d *dbView) renderList(width, height int) string {
-	var rows []string
-	rows = append(rows, stylePickerTitle.Render("▦ databases"), "")
+	body := d.listLines(width).join()
+	return styleTasksPane.Width(width).Height(height).MaxHeight(height).Render(body)
+}
+
+// listLines lays the table list out, tagging each line with its index into
+// d.list.
+func (d *dbView) listLines(width int) *rowBuilder {
+	b := &rowBuilder{}
+	b.chrome(stylePickerTitle.Render("▦ databases"), "")
 	switch {
 	case d.loading:
-		rows = append(rows, styleFeedTopic.Render("loading…"))
+		b.chrome(styleFeedTopic.Render("loading…"))
 	case len(d.list) == 0:
-		rows = append(rows, styleFeedTopic.Render("no databases yet — create one on the web"))
+		b.chrome(styleFeedTopic.Render("no databases yet — create one on the web"))
 	}
 	for i, db := range d.list {
 		label := fmt.Sprintf("%s  %s  %s", db.Slug, styleFeedTopic.Render(fmt.Sprintf("%d rows", db.RowsCount)), db.Name)
-		if i == d.sel {
-			rows = append(rows, stylePickerSel.Render("▸ "+truncate(label, width-6)))
-		} else {
-			rows = append(rows, stylePickerRow.Render("  "+truncate(label, width-6)))
-		}
+		b.row(pickerLine(label, i == d.sel, width), i)
 	}
-	rows = append(rows, "", styleFeedTopic.Render("enter open · r refresh · esc back"))
-	return styleTasksPane.Width(width).Height(height).MaxHeight(height).Render(strings.Join(rows, "\n"))
+	b.chrome("", styleFeedTopic.Render("enter open · r refresh · esc back"))
+	return b
 }
 
 func (d *dbView) renderGrid(width, height int) string {
@@ -228,8 +230,15 @@ func (d *dbView) renderDetail(width, height int) string {
 	if row == nil || d.database == nil {
 		return styleFeedTopic.Render("row gone — esc")
 	}
-	var rows []string
-	rows = append(rows, stylePickerTitle.Render(fmt.Sprintf("▦ %s · row %d", d.database.Name, row.ID)), "")
+	body := d.detailLines(row, width).join()
+	return styleTasksPane.Width(width).Height(height).MaxHeight(height).Render(body)
+}
+
+// detailLines lays a row's fields out, tagging each with its column index —
+// the space fieldSel moves over.
+func (d *dbView) detailLines(row *api.DBRow, width int) *rowBuilder {
+	b := &rowBuilder{}
+	b.chrome(stylePickerTitle.Render(fmt.Sprintf("▦ %s · row %d", d.database.Name, row.ID)), "")
 	for i, col := range d.columns() {
 		value := tablefmt.RenderCell(row.Data[col.Key])
 		line := col.Label() + ": " + value
@@ -239,17 +248,13 @@ func (d *dbView) renderDetail(width, height int) string {
 		if d.editOpen && d.editKey == col.Key {
 			line = col.Label() + ": " + d.input.View()
 		}
-		if i == d.fieldSel {
-			rows = append(rows, stylePickerSel.Render("▸ "+truncate(line, width-6)))
-		} else {
-			rows = append(rows, stylePickerRow.Render("  "+truncate(line, width-6)))
-		}
+		b.row(pickerLine(line, i == d.fieldSel, width), i)
 	}
 	if row.Body != nil && *row.Body != "" {
-		rows = append(rows, "", styleFeedTopic.Render("body: "+truncate(*row.Body, width-12)))
+		b.chrome("", styleFeedTopic.Render("body: "+truncate(*row.Body, width-12)))
 	}
-	rows = append(rows, "", styleFeedTopic.Render("enter edit field · esc back"))
-	return styleTasksPane.Width(width).Height(height).MaxHeight(height).Render(strings.Join(rows, "\n"))
+	b.chrome("", styleFeedTopic.Render("enter edit field · esc back"))
+	return b
 }
 
 func clampInt(v, lo, hi int) int {

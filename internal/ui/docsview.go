@@ -125,16 +125,24 @@ func (d *docsView) render(width, height int) string {
 		return title + "\n" + d.vp.View() + "\n" + hint
 	}
 
-	var rows []string
-	rows = append(rows, stylePickerTitle.Render("▤ documents"), "")
+	body := d.listLines(width).join()
+	return styleTasksPane.Width(width).Height(height).MaxHeight(height).Render(body)
+}
+
+// listLines lays the browser out, tagging each line with its index into d.list.
+// A new-document prompt above the list shifts every row down, which is exactly
+// the drift the builder exists to track.
+func (d *docsView) listLines(width int) *rowBuilder {
+	b := &rowBuilder{}
+	b.chrome(stylePickerTitle.Render("▤ documents"), "")
 	if d.inputOpen {
-		rows = append(rows, d.input.View(), "")
+		b.chrome(d.input.View(), "")
 	}
 	switch {
 	case d.loading:
-		rows = append(rows, styleFeedTopic.Render("loading…"))
+		b.chrome(styleFeedTopic.Render("loading…"))
 	case len(d.list) == 0:
-		rows = append(rows, styleFeedTopic.Render("no documents yet — n creates one"))
+		b.chrome(styleFeedTopic.Render("no documents yet — n creates one"))
 	}
 	for i, doc := range d.list {
 		label := doc.Title + "  " + styleFeedTopic.Render(doc.Slug)
@@ -142,12 +150,8 @@ func (d *docsView) render(width, height int) string {
 			label += " " + styleStatusOK.Render("· published")
 		}
 		label += "  " + styleTimestamp.Render(doc.UpdatedAt.Local().Format("Jan 2"))
-		if i == d.sel {
-			rows = append(rows, stylePickerSel.Render("▸ "+truncate(label, width-6)))
-		} else {
-			rows = append(rows, stylePickerRow.Render("  "+truncate(label, width-6)))
-		}
+		b.row(pickerLine(label, i == d.sel, width), i)
 	}
-	rows = append(rows, "", styleFeedTopic.Render("enter read · e edit · n new · y copy embed · r refresh · esc back"))
-	return styleTasksPane.Width(width).Height(height).MaxHeight(height).Render(strings.Join(rows, "\n"))
+	b.chrome("", styleFeedTopic.Render("enter read · e edit · n new · y copy embed · r refresh · esc back"))
+	return b
 }

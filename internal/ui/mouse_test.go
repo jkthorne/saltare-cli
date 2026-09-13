@@ -484,3 +484,212 @@ func TestMouseToggleLabelDescribesTheState(t *testing.T) {
 		t.Fatalf("label must read as off, got %q", got)
 	}
 }
+
+// ── list panes ──────────────────────────────────────────────────────────
+
+// paneLineOf is the screen row a list pane draws an item on. Tests ask the same
+// builder View does rather than hardcoding offsets that shift the moment a pane
+// grows a prompt line.
+func paneLineOf(m Model, b *rowBuilder, item int) int {
+	return b.lineOf(item) + m.rects.pane.y + panePadTop
+}
+
+// tasksClickModel is a sized tasks pane — mouseModel, not taskdetail_test's
+// tasksModel, because hit tests need the rects a WindowSizeMsg creates.
+func tasksClickModel(t *testing.T) Model {
+	t.Helper()
+	m := mouseModel(t, 100, 30, 0)
+	m.view = viewTasks
+	m.tasks.active = true
+	m.tasks.tasks = []api.Task{
+		{ID: 1, Slug: "alpha", Title: "Alpha task", State: "open"},
+		{ID: 2, Slug: "beta", Title: "Beta task", State: "open"},
+	}
+	return m
+}
+
+// The hit map is only right if the row it names is the row View draws. panePadTop
+// is an assumption about the pane style's padding, and this is what checks it
+// against the real frame.
+func TestPaneRowLinesMatchTheRenderedFrame(t *testing.T) {
+	m := tasksClickModel(t)
+
+	y := paneLineOf(m, m.tasks.listLines(m.rects.pane.w), 1)
+	lines := strings.Split(m.View(), "\n")
+	if y < 0 || y >= len(lines) {
+		t.Fatalf("row 1 mapped to line %d, frame has %d", y, len(lines))
+	}
+	if !strings.Contains(lines[y], "Beta task") {
+		t.Fatalf("line %d should draw the second task, got %q", y, lines[y])
+	}
+}
+
+func TestTasksClickOpensTheDetail(t *testing.T) {
+	m := tasksClickModel(t)
+
+	y := paneLineOf(m, m.tasks.listLines(m.rects.pane.w), 1)
+	step, _ := m.Update(clickAt(m.rects.pane.x+4, y))
+	model := step.(Model)
+
+	if model.tasks.sel != 1 {
+		t.Fatalf("a click must move the cursor, sel=%d", model.tasks.sel)
+	}
+	if model.tasks.detail == nil || model.tasks.detail.Slug != "beta" {
+		t.Fatalf("a click must open the detail the way enter does, detail=%+v", model.tasks.detail)
+	}
+}
+
+func TestTasksClickOnAHintLineIsInert(t *testing.T) {
+	m := tasksClickModel(t)
+
+	// The key-hint line at the bottom of the pane belongs to no task.
+	step, _ := m.Update(clickAt(m.rects.pane.x+4, m.rects.pane.y+m.rects.pane.h-1))
+	model := step.(Model)
+
+	if model.tasks.detail != nil {
+		t.Fatalf("chrome must not open anything, detail=%+v", model.tasks.detail)
+	}
+}
+
+func TestAgendaClickSkipsSectionHeaders(t *testing.T) {
+	m := tasksClickModel(t)
+	m.tasks.agenda = true
+	m.tasks.rows = []agendaRow{
+		{header: "overdue"},
+		{task: &m.tasks.tasks[0]},
+		{header: "today"},
+		{task: &m.tasks.tasks[1]},
+	}
+
+	rows := m.tasks.listLines(m.rects.pane.w)
+	step, _ := m.Update(clickAt(m.rects.pane.x+4, paneLineOf(m, rows, 3)))
+	model := step.(Model)
+	if model.tasks.sel != 3 || model.tasks.detail == nil {
+		t.Fatalf("a click must open the task under it, sel=%d detail=%+v", model.tasks.sel, model.tasks.detail)
+	}
+
+	// A header draws on its own line and selects nothing.
+	headerLine := rows.lineOf(2)
+	if headerLine != -1 {
+		t.Fatalf("a section header must not be a click target, it claimed line %d", headerLine)
+	}
+}
+
+func TestProjectPickClickCreatesTheTask(t *testing.T) {
+	m := tasksClickModel(t)
+	m.tasks.projects = []api.Project{{ID: 7, Name: "Apollo"}, {ID: 9, Name: "Gemini"}}
+	m.tasks.inputOpen = true
+	m.tasks.pickOpen = true
+	m.tasks.pendingTitle = "ship it"
+
+	y := paneLineOf(m, m.tasks.listLines(m.rects.pane.w), 1)
+	step, cmd := m.Update(clickAt(m.rects.pane.x+4, y))
+	model := step.(Model)
+
+	if cmd == nil {
+		t.Fatal("picking a project must dispatch the create, as enter does")
+	}
+	if model.tasks.inputOpen || model.tasks.pickOpen {
+		t.Fatal("picking a project must close the prompt")
+	}
+}
+
+func TestDocsClickOpensTheReader(t *testing.T) {
+	m := mouseModel(t, 100, 30, 0)
+	m.view = viewDocs
+	m.docs.list = []api.Document{
+		{ID: 1, Slug: "spec", Title: "The Spec"},
+		{ID: 2, Slug: "notes", Title: "Notes"},
+	}
+
+	y := paneLineOf(m, m.docs.listLines(m.rects.pane.w), 1)
+	step, cmd := m.Update(clickAt(m.rects.pane.x+4, y))
+	model := step.(Model)
+
+	if model.docs.sel != 1 {
+		t.Fatalf("a click must move the cursor, sel=%d", model.docs.sel)
+	}
+	if cmd == nil || !model.docs.loading {
+		t.Fatal("a click must fetch the document the way enter does")
+	}
+}
+
+// A prompt owns the pane's keys while it is up, so it owns the clicks too.
+func TestListPaneClickIsInertWhileAPromptOwnsTheKeys(t *testing.T) {
+	m := mouseModel(t, 100, 30, 0)
+	m.view = viewDocs
+	m.docs.list = []api.Document{{ID: 1, Slug: "spec", Title: "The Spec"}}
+	rows := m.docs.listLines(m.rects.pane.w) // laid out before the prompt opens
+	m.docs.inputOpen = true
+
+	step, cmd := m.Update(clickAt(m.rects.pane.x+4, paneLineOf(m, rows, 0)))
+	if cmd != nil || step.(Model).docs.loading {
+		t.Fatal("a click must not reach the list while the title prompt is up")
+	}
+}
+
+// Files has no enter action — the cursor is what d/x/y act on — so a click
+// moves it and nothing more.
+func TestFilesClickMovesTheCursorOnly(t *testing.T) {
+	m := mouseModel(t, 100, 30, 0)
+	m.view = viewFiles
+	m.files.list = []api.Upload{
+		{ID: 1, Slug: "q4-report", Title: "Q4 Report"},
+		{ID: 2, Slug: "logo", Title: "Logo"},
+	}
+
+	y := paneLineOf(m, m.files.listLines(m.rects.pane.w), 1)
+	step, cmd := m.Update(clickAt(m.rects.pane.x+4, y))
+	model := step.(Model)
+
+	if model.files.sel != 1 {
+		t.Fatalf("a click must move the cursor, sel=%d", model.files.sel)
+	}
+	if cmd != nil {
+		t.Fatal("a click must not act where enter does nothing")
+	}
+}
+
+func TestDatabaseListClickOpensTheGrid(t *testing.T) {
+	m := mouseModel(t, 100, 30, 0)
+	m.view = viewDB
+	m.db.list = []api.Database{
+		{ID: 1, Slug: "people", Name: "People"},
+		{ID: 2, Slug: "orders", Name: "Orders"},
+	}
+
+	y := paneLineOf(m, m.db.listLines(m.rects.pane.w), 1)
+	step, cmd := m.Update(clickAt(m.rects.pane.x+4, y))
+	model := step.(Model)
+
+	if model.db.level != dbLevelGrid || model.db.pendingSlug != "orders" {
+		t.Fatalf("a click must open the table, level=%d slug=%q", model.db.level, model.db.pendingSlug)
+	}
+	if cmd == nil {
+		t.Fatal("opening a table must dispatch its fetches")
+	}
+}
+
+// Enter opens a cell editor here, and a stray click shouldn't drop you inside a
+// prompt — so a click moves the field cursor and stops.
+func TestDatabaseRowDetailClickMovesTheFieldCursor(t *testing.T) {
+	m := mouseModel(t, 100, 30, 0)
+	m.view = viewDB
+	m.db.level = dbLevelDetail
+	m.db.database = &api.Database{ID: 1, Slug: "people", Name: "People", Schema: &api.DBSchema{
+		Columns: []api.DBColumn{{Key: "id", Name: "ID"}, {Key: "name", Name: "Name"}},
+	}}
+	m.db.rows = []api.DBRow{{ID: 5, Data: map[string]any{"id": 5, "name": "Ada"}}}
+	m.db.detailIdx = 0
+
+	y := paneLineOf(m, m.db.detailLines(m.db.currentRow(), m.rects.pane.w), 1)
+	step, cmd := m.Update(clickAt(m.rects.pane.x+4, y))
+	model := step.(Model)
+
+	if model.db.fieldSel != 1 {
+		t.Fatalf("a click must move the field cursor, fieldSel=%d", model.db.fieldSel)
+	}
+	if cmd != nil || model.db.editOpen {
+		t.Fatal("a click must not open the cell editor")
+	}
+}
