@@ -47,7 +47,7 @@ func TestPublishWritesOwnerOnlyAndReadsBack(t *testing.T) {
 	}
 }
 
-func TestPublishSkipsTheWriteWhenOnlyTheClockMoved(t *testing.T) {
+func TestPublishSkipsARepeatWithinTheHeartbeat(t *testing.T) {
 	path := tempPath(t)
 	w := NewWriter(path)
 	in := baseInputs()
@@ -60,29 +60,77 @@ func TestPublishSkipsTheWriteWhenOnlyTheClockMoved(t *testing.T) {
 		t.Fatal(err)
 	}
 
-	in.Now = in.Now.Add(30 * time.Second) // a heartbeat, nothing else
+	// Same content, a second later: nothing to say and the last word is fresh.
+	in.Now = in.Now.Add(time.Second)
 	changed, err := w.Publish(Reduce(in))
 	if err != nil {
 		t.Fatalf("second publish: %v", err)
 	}
 	if changed {
-		t.Error("a heartbeat with identical content must not rewrite the file")
+		t.Error("identical content is not news")
 	}
-
 	after, err := os.ReadFile(path)
 	if err != nil {
 		t.Fatal(err)
 	}
 	if string(before) != string(after) {
-		t.Error("content changed despite the reducer producing the same document")
+		t.Error("a repeat inside the heartbeat window should not rewrite")
 	}
-	// but mtime moved, which is how a reader tells quiet from dead
-	info, err := os.Stat(path)
+}
+
+func TestHeartbeatRewritesSoReadersSeeAFreshTimestamp(t *testing.T) {
+	// The bug this exists for: the heartbeat used to move mtime and leave the
+	// document's own UpdatedAt alone. Staleness is judged on UpdatedAt, so a
+	// perfectly healthy daemon read as "stopped" ninety seconds after the last
+	// thing happened — which on a quiet workspace is always.
+	path := tempPath(t)
+	w := NewWriter(path)
+	in := baseInputs()
+
+	if _, err := w.Publish(Reduce(in)); err != nil {
+		t.Fatal(err)
+	}
+
+	in.Now = in.Now.Add(time.Duration(HeartbeatSec) * time.Second)
+	changed, err := w.Publish(Reduce(in))
+	if err != nil {
+		t.Fatalf("heartbeat publish: %v", err)
+	}
+	if changed {
+		t.Error("a heartbeat is not a content change, and callers tell them apart")
+	}
+
+	got, err := Read(path)
 	if err != nil {
 		t.Fatal(err)
 	}
-	if !info.ModTime().Equal(in.Now) {
-		t.Errorf("heartbeat must move mtime: want %v, got %v", in.Now, info.ModTime())
+	if !got.UpdatedAt.Equal(in.Now) {
+		t.Errorf("the document must carry the heartbeat's time: want %v, got %v", in.Now, got.UpdatedAt)
+	}
+	if got.Stale(in.Now) {
+		t.Error("a document just written must not read as stale")
+	}
+}
+
+func TestAHealthyDaemonNeverReadsAsStale(t *testing.T) {
+	// End to end over the rule readers actually apply: publish on the heartbeat
+	// for ten minutes of an idle workspace and never once look stopped.
+	path := tempPath(t)
+	w := NewWriter(path)
+	in := baseInputs()
+
+	for minute := 0; minute < 20; minute++ {
+		in.Now = in.Now.Add(time.Duration(HeartbeatSec) * time.Second)
+		if _, err := w.Publish(Reduce(in)); err != nil {
+			t.Fatalf("publish at %v: %v", in.Now, err)
+		}
+		got, err := Read(path)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if got.Stale(in.Now) {
+			t.Fatalf("stale after %d heartbeats on an idle workspace", minute+1)
+		}
 	}
 }
 

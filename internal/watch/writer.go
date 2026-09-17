@@ -15,8 +15,9 @@ import (
 // readers watch with inotify: a plain truncate-and-write hands a half-written
 // file to the bar, which then draws a parse error.
 type Writer struct {
-	path string
-	last []byte // content fingerprint, UpdatedAt excluded
+	path      string
+	last      []byte    // content fingerprint, UpdatedAt excluded
+	lastWrite time.Time // when the document on disk last claimed to be true
 }
 
 func NewWriter(path string) *Writer { return &Writer{path: path} }
@@ -24,18 +25,32 @@ func NewWriter(path string) *Writer { return &Writer{path: path} }
 func (w *Writer) Path() string { return w.path }
 
 // Publish writes s when its content differs from the last publish, and
-// otherwise only moves mtime forward. The distinction matters: every write
-// wakes every FileView in the shell, and a 30-second heartbeat that rewrote an
-// identical file would repaint the bar twice a minute for nothing.
+// otherwise at most once per heartbeat.
 //
-// Reports whether the content changed.
+// The heartbeat has to be a real write. An earlier version skipped it and moved
+// mtime instead, on the theory that a rewrite of identical bytes wakes every
+// FileView in the shell for nothing — but staleness is judged on UpdatedAt
+// *inside* the document, so touching mtime left every reader looking at an
+// hour-old timestamp and calling a healthy daemon stopped. A liveness signal
+// nobody reads is not a liveness signal.
+//
+// Two writes a minute on an idle workspace is the price, and it is the right
+// one: the alternative is a bar that says "watcher stopped" whenever nothing is
+// happening, which is most of the time.
+//
+// Reports whether the *content* changed, so a caller can tell news from a
+// heartbeat.
 func (w *Writer) Publish(s State) (bool, error) {
 	fingerprint, err := fingerprint(s)
 	if err != nil {
 		return false, err
 	}
-	if w.last != nil && bytes.Equal(w.last, fingerprint) {
-		return false, w.touch(s.UpdatedAt)
+	unchanged := w.last != nil && bytes.Equal(w.last, fingerprint)
+	// One stat, so a document someone deleted comes straight back rather than
+	// waiting out the heartbeat. Readers treat a missing file as "nothing is
+	// installed", which is a much worse thing to say than a stale count.
+	if unchanged && s.UpdatedAt.Sub(w.lastWrite) < HeartbeatSec*time.Second && w.onDisk() {
+		return false, nil
 	}
 
 	body, err := json.MarshalIndent(s, "", "  ")
@@ -56,20 +71,14 @@ func (w *Writer) Publish(s State) (bool, error) {
 		return false, err
 	}
 	w.last = fingerprint
-	return true, nil
+	w.lastWrite = s.UpdatedAt
+	return !unchanged, nil
 }
 
-// touch moves mtime without rewriting. A reader tells "quiet" from "dead" by
-// age, so a heartbeat has to be visible even when nothing changed.
-func (w *Writer) touch(at time.Time) error {
-	if err := os.Chtimes(w.path, at, at); err != nil {
-		if os.IsNotExist(err) {
-			w.last = nil // the file was removed under us; the next Publish rewrites it
-			return nil
-		}
-		return err
-	}
-	return nil
+// onDisk reports whether the published document is still where it was left.
+func (w *Writer) onDisk() bool {
+	_, err := os.Stat(w.path)
+	return err == nil
 }
 
 // fingerprint is the document with UpdatedAt zeroed — otherwise every
