@@ -1,0 +1,78 @@
+{
+  "schema": 1,
+  "updated_at": "2026-09-16T18:42:11Z",
+  "heartbeat_sec": 30,
+  "state": "ok",
+  "live": true,
+  "server": "https://saltare.ai",
+  "workspace": {
+    "slug": "acme",
+    "name": "Acme"
+  },
+  "user": {
+    "id": 7,
+    "name": "Jack Thorne"
+  },
+  "totals": {
+    "unread": 13,
+    "mentions": 1,
+    "notifications": 1,
+    "overdue": 1,
+    "due_today": 1
+  },
+  "channels": [
+    {
+      "slug": "engineering",
+      "title": "engineering",
+      "kind": "channel",
+      "unread": 9,
+      "mentioned": false
+    },
+    {
+      "slug": "general",
+      "title": "general",
+      "kind": "channel",
+      "unread": 3,
+      "mentioned": true
+    },
+    {
+      "slug": "alice-chen",
+      "title": "Alice Chen",
+      "kind": "dm",
+      "unread": 1,
+      "mentioned": false
+    }
+  ],
+  "notifications": [
+    {
+      "id": 991,
+      "action": "mentioned",
+      "actor": "Alice Chen",
+      "description": "mentioned you",
+      "channel_slug": "general",
+      "preview": "can you look at the deploy?",
+      "task_slug": "",
+      "task_title": "",
+      "created_at": "2026-09-16T18:41:02Z"
+    }
+  ],
+  "work": {
+    "overdue": [
+      {
+        "slug": "fix-deploy",
+        "title": "Fix the deploy",
+        "due_date": "2026-09-14",
+        "state": "open"
+      }
+    ],
+    "today": [
+      {
+        "slug": "ship-plugin",
+        "title": "Ship the Omarchy plugin",
+        "due_date": "2026-09-16",
+        "state": "in_progress"
+      }
+    ]
+  },
+  "error": ""
+}
