@@ -91,7 +91,33 @@ go build -o sal ./cmd/sal
 | `sal db` | List databases (`--json`) |
 | `sal db rows SLUG` | Dump a table — TSV by default, `--csv`, `--json`, `--limit N` |
 | `sal ask QUESTION` | Claude answer streamed to stdout, grounded via workspace tools (`--model`, `--no-tools`; reads stdin when QUESTION omitted) |
+| `sal agents` | List the workspace's agents (`--json`) |
+| `sal agents message AGENT [MSG]` | Send to an agent's DM (reads stdin when MSG omitted) |
+| `sal open KIND SLUG` | Open a channel, task, agent or message in the browser (`--print`) |
+| `sal watch` | Publish unread, mentions and due work to a state file — see below |
+| `sal status` | Read that file. No network, no token (`--json`, `--waybar`, `--follow`) |
 | `sal version` | Print the version |
+
+## Watching
+
+`sal watch` holds the session and publishes what it knows to
+`$XDG_STATE_HOME/saltare/watch.json`. Everything else reads that file: the
+[Omarchy widget](https://github.com/jkthorne/saltare-omarchy), a waybar module
+(`sal status --waybar --follow`), a shell prompt (`sal status`). They need no
+credentials of their own, which is the point — the token stays in one process.
+
+```sh
+sal watch --install-service    # systemd user unit, starts on login
+sal watch --notify             # desktop toasts for mentions and DMs
+```
+
+**It costs API requests, and the budget is small.** The websocket is free — it
+never reaches the usage gate — but the backstop poll is metered. Two requests
+every five minutes plus a task refresh every thirty is about **18,700 a
+month**, which is a third of what the Pro plan includes and more than a starter
+workspace gets in total. `--poll` tunes it; the first version of this used a
+one-minute poll and spent 129,600 a month idling, which was two and a half
+times everything Pro includes.
 
 ## TUI keys
 

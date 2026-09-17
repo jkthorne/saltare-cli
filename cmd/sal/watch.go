@@ -30,13 +30,32 @@ const exitAlreadyRunning = 3
 // in a busy channel would be a request per keystroke of someone else's typing.
 const notifyDebounce = 250 * time.Millisecond
 
+// defaultPoll is a backstop, not the delivery path — the socket delivers, and
+// the socket costs nothing because /cable never reaches the API usage gate.
+//
+// The interval is a budget decision, and the budget is small. Every resync is
+// three metered requests, so a one-minute poll — the first version of this —
+// spends 129,600 requests a month sitting idle, which is two and a half times
+// everything the Pro plan includes. A workspace would exhaust its month in
+// eleven days running a bar widget and nothing else.
+//
+// Five minutes with tasks on their own slower clock costs about 18,700 a
+// month. Still the largest single consumer on a Pro workspace, and now a share
+// of the budget rather than a multiple of it.
+const defaultPoll = 5 * time.Minute
+
+// taskInterval is separate because due dates do not change minute to minute.
+// Folding tasks into every resync tripled the cost of the frequent thing to
+// keep the rare thing fresh.
+const taskInterval = 30 * time.Minute
+
 func runWatch(args []string) error {
 	fs := flag.NewFlagSet("watch", flag.ExitOnError)
 	statePath := fs.String("state", "", "state file (default $XDG_STATE_HOME/saltare/watch.json)")
 	ndjson := fs.Bool("ndjson", false, "emit one JSON event per line on stdout")
 	once := fs.Bool("once", false, "publish a single snapshot and exit")
 	noCable := fs.Bool("no-cable", false, "poll only — do not open the realtime socket")
-	poll := fs.Duration("poll", 60*time.Second, "full re-sync interval")
+	poll := fs.Duration("poll", defaultPoll, "backstop re-sync interval")
 	notify := fs.Bool("notify", false, "raise a desktop notification when someone addresses you")
 	notifyAll := fs.Bool("notify-all", false, "notify for every kind, including workspace alerts")
 	install := fs.Bool("install-service", false, "write and start the systemd user service, then exit")
@@ -136,6 +155,10 @@ type watcher struct {
 	// subscribe adds a channel to the live socket. Nil until the cable is up,
 	// and nil forever under --no-cable.
 	subscribe func(int64)
+
+	// lastTasks is when the task list was last fetched. Zero means never, so
+	// the first resync always gets one.
+	lastTasks time.Time
 }
 
 // subscribeKnown tells the socket about every channel the store now holds.
@@ -255,12 +278,15 @@ func (w *watcher) resync(ctx context.Context) {
 	}
 	w.inputs.Notifications = notifications
 
-	tasks, err := w.client.Tasks(ctx, api.TasksOpts{Mine: true})
-	if err != nil {
-		w.degrade(err)
-		return
+	if now := time.Now(); now.Sub(w.lastTasks) >= taskInterval {
+		tasks, err := w.client.Tasks(ctx, api.TasksOpts{Mine: true})
+		if err != nil {
+			w.degrade(err)
+			return
+		}
+		w.inputs.Tasks = tasks
+		w.lastTasks = now
 	}
-	w.inputs.Tasks = tasks
 
 	w.recover()
 	w.subscribeKnown()

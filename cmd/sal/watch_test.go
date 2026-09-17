@@ -7,6 +7,7 @@ import (
 	"strconv"
 	"strings"
 	"testing"
+	"time"
 
 	"github.com/jkthorne/saltare-cli/internal/api"
 	"github.com/jkthorne/saltare-cli/internal/config"
@@ -190,4 +191,49 @@ func TestSubscribeKnownIsSafeWithoutACable(t *testing.T) {
 	w := &watcher{store: store.New(), seen: map[int64]bool{}}
 	w.store.SetChannels([]api.Channel{{ID: 1, Slug: "general"}})
 	w.subscribeKnown()
+}
+
+func TestTasksAreNotRefetchedOnEveryResync(t *testing.T) {
+	// Every resync is three metered API requests. Folding tasks into all of
+	// them tripled the cost of the frequent thing to keep the rare thing
+	// fresh: a one-minute poll spent 129,600 requests a month idling, which is
+	// two and a half times everything the Pro plan includes.
+	w := &watcher{seen: map[int64]bool{}}
+
+	if w.lastTasks.IsZero() != true {
+		t.Fatal("a fresh watcher has never fetched tasks")
+	}
+
+	// A fetch just now means the next resync inside the window skips them.
+	w.lastTasks = time.Now()
+	if time.Since(w.lastTasks) >= taskInterval {
+		t.Error("a task fetch should hold for taskInterval")
+	}
+
+	// Past the window it fetches again.
+	w.lastTasks = time.Now().Add(-taskInterval - time.Second)
+	if time.Since(w.lastTasks) < taskInterval {
+		t.Error("past the interval, tasks are due for a refetch")
+	}
+}
+
+func TestTheIdleBudgetFitsInsideThePlanItTargets(t *testing.T) {
+	// The numbers are the point, so they are asserted rather than trusted to a
+	// comment that drifts. Pro includes 50,000 API requests a month
+	// (PlanLimits::PLAN_LIMITS); an always-on watcher must be a share of that,
+	// not a multiple.
+	const proMonthlyRequests = 50_000
+	const daysPerMonth = 30
+
+	perDay := 2*(24*time.Hour/defaultPoll) + 1*(24*time.Hour/taskInterval)
+	perMonth := int(perDay) * daysPerMonth
+
+	if perMonth >= proMonthlyRequests {
+		t.Fatalf("an idle watcher costs %d requests/month, at or over Pro's whole %d",
+			perMonth, proMonthlyRequests)
+	}
+	if share := float64(perMonth) / proMonthlyRequests; share > 0.5 {
+		t.Errorf("an idle watcher is %.0f%% of a Pro workspace's monthly budget; keep it under half",
+			share*100)
+	}
 }
