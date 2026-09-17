@@ -30,19 +30,30 @@ act on your workspace.
 
 ## Install
 
-Homebrew (needs repo access — the tap builds from source over SSH because
-this repo is private):
+With Go:
 
 ```sh
-brew tap jkthorne/tap git@github.com:jkthorne/homebrew-tap.git
+go install github.com/jkthorne/saltare-cli/cmd/sal@latest
+```
+
+Homebrew — the tap still builds from source, a holdover from when this repo was
+private:
+
+```sh
+brew tap jkthorne/tap https://github.com/jkthorne/homebrew-tap.git
 brew install sal
 ```
 
-Or grab a `sal_*_<os>_<arch>.tar.gz` from a GitHub release. Releases are cut
-by pushing a `v*` tag (`.github/workflows/release.yml` runs goreleaser;
-config in `.goreleaser.yaml`). After tagging, bump `tag`/`version` in the
-tap's `Formula/sal.rb`. When this repo goes public, switch the tap to
-goreleaser's generated binary formulas (block ready in `.goreleaser.yaml`).
+Or grab a `sal_*_<os>_<arch>.tar.gz` from a GitHub release. Releases are cut by
+pushing a `v*` tag (`.github/workflows/release.yml` runs goreleaser; config in
+`.goreleaser.yaml`). After tagging, bump `tag`/`version` in the tap's
+`Formula/sal.rb`.
+
+Now that the repo is public, goreleaser can generate binary formulas and push
+them to the tap itself — the `brews:` block in `.goreleaser.yaml` is written and
+commented out. It needs `HOMEBREW_TAP_TOKEN` set as a repository secret first;
+it is not set today, and uncommenting the block without it would fail the next
+release rather than publish one.
 
 From source:
 
