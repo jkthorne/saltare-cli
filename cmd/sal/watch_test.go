@@ -10,6 +10,7 @@ import (
 
 	"github.com/jkthorne/saltare-cli/internal/api"
 	"github.com/jkthorne/saltare-cli/internal/config"
+	"github.com/jkthorne/saltare-cli/internal/store"
 	"github.com/jkthorne/saltare-cli/internal/watch"
 )
 
@@ -146,4 +147,47 @@ func TestDegradeTellsARefusalFromAnOutage(t *testing.T) {
 	if w.inputs.Session != watch.SessionLoggedOut {
 		t.Errorf("an expired session is terminal: got %q", w.inputs.Session)
 	}
+}
+
+func TestSubscribeKnownOffersEveryChannelToTheSocket(t *testing.T) {
+	// Found live: an agent DM created after the daemon started never streamed,
+	// because the socket was only ever told about the channels that existed at
+	// connect time. A fresh DM or a thread someone started with you is exactly
+	// the channel worth hearing about immediately.
+	var offered []int64
+	w := &watcher{
+		store:     store.New(),
+		seen:      map[int64]bool{},
+		subscribe: func(id int64) { offered = append(offered, id) },
+	}
+	w.store.SetChannels([]api.Channel{{ID: 1, Slug: "general"}, {ID: 2, Slug: "engineering"}})
+
+	w.subscribeKnown()
+	if len(offered) != 2 {
+		t.Fatalf("want both channels offered, got %v", offered)
+	}
+
+	// A channel discovered by a later resync is offered too.
+	w.store.SetChannels([]api.Channel{
+		{ID: 1, Slug: "general"}, {ID: 2, Slug: "engineering"}, {ID: 140, Slug: "agent-dm-2-1"},
+	})
+	offered = nil
+	w.subscribeKnown()
+
+	found := false
+	for _, id := range offered {
+		if id == 140 {
+			found = true
+		}
+	}
+	if !found {
+		t.Errorf("the new channel must reach the socket, got %v", offered)
+	}
+}
+
+func TestSubscribeKnownIsSafeWithoutACable(t *testing.T) {
+	// --no-cable leaves subscribe nil, and resync still calls this.
+	w := &watcher{store: store.New(), seen: map[int64]bool{}}
+	w.store.SetChannels([]api.Channel{{ID: 1, Slug: "general"}})
+	w.subscribeKnown()
 }

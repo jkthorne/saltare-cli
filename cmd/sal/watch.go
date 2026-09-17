@@ -130,8 +130,25 @@ type watcher struct {
 	seen   map[int64]bool
 	primed bool
 
-	// onNew is where --notify hangs its toasts. Nil here; S3 sets it.
+	// onNew is where --notify hangs its toasts.
 	onNew func(watch.Notification)
+
+	// subscribe adds a channel to the live socket. Nil until the cable is up,
+	// and nil forever under --no-cable.
+	subscribe func(int64)
+}
+
+// subscribeKnown tells the socket about every channel the store now holds.
+// Called after each resync, because a resync is the only way a new channel is
+// ever discovered. Subscribe is idempotent, so re-offering the whole set is
+// cheaper than tracking which ones are new.
+func (w *watcher) subscribeKnown() {
+	if w.subscribe == nil {
+		return
+	}
+	for _, id := range w.channelIDs() {
+		w.subscribe(id)
+	}
 }
 
 func (w *watcher) run(ctx context.Context, pollEvery time.Duration, noCable bool) error {
@@ -150,6 +167,12 @@ func (w *watcher) run(ctx context.Context, pollEvery time.Duration, noCable bool
 	var events <-chan cable.Event
 	if !noCable {
 		c := cable.NewClient(w.cfg.ServerURL, w.client.AccessToken, w.channelIDs())
+		// Channels that appear after this point — a fresh agent DM, a thread
+		// someone started, a channel you were added to — are exactly the ones
+		// worth hearing about immediately, and the socket knows nothing about
+		// them until told. Without this they surface only on the poll tick.
+		w.subscribe = c.Subscribe
+		w.subscribeKnown()
 		go c.Run(ctx)
 		events = c.Events()
 	}
@@ -240,6 +263,7 @@ func (w *watcher) resync(ctx context.Context) {
 	w.inputs.Tasks = tasks
 
 	w.recover()
+	w.subscribeKnown()
 	w.noteNew(notifications)
 }
 
