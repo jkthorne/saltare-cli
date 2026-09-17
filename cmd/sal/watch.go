@@ -16,6 +16,7 @@ import (
 	"github.com/jkthorne/saltare-cli/internal/config"
 	"github.com/jkthorne/saltare-cli/internal/store"
 	"github.com/jkthorne/saltare-cli/internal/watch"
+	"github.com/jkthorne/saltare-cli/internal/weblink"
 )
 
 // exitAlreadyRunning is distinct from a plain failure so a supervisor, or a
@@ -36,8 +37,19 @@ func runWatch(args []string) error {
 	once := fs.Bool("once", false, "publish a single snapshot and exit")
 	noCable := fs.Bool("no-cable", false, "poll only — do not open the realtime socket")
 	poll := fs.Duration("poll", 60*time.Second, "full re-sync interval")
+	notify := fs.Bool("notify", false, "raise a desktop notification when someone addresses you")
+	notifyAll := fs.Bool("notify-all", false, "notify for every kind, including workspace alerts")
+	install := fs.Bool("install-service", false, "write and start the systemd user service, then exit")
+	uninstall := fs.Bool("uninstall-service", false, "stop and remove the systemd user service, then exit")
 	if err := fs.Parse(args); err != nil {
 		return err
+	}
+
+	switch {
+	case *install:
+		return installService()
+	case *uninstall:
+		return uninstallService()
 	}
 
 	path := *statePath
@@ -68,6 +80,13 @@ func runWatch(args []string) error {
 			User:      watch.User{ID: cfg.UserID, Name: cfg.UserName},
 			Session:   watch.SessionOK,
 		},
+	}
+
+	if *notify || *notifyAll {
+		w.onNew = newNotifier(
+			weblink.Links{Server: cfg.ServerURL, Workspace: cfg.WorkspaceSlug},
+			*notifyAll,
+		).notify
 	}
 
 	ctx, cancel := interruptContext()

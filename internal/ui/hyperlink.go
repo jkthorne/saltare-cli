@@ -1,8 +1,9 @@
 package ui
 
 import (
-	"fmt"
 	"strings"
+
+	"github.com/jkthorne/saltare-cli/internal/weblink"
 )
 
 // osc8 wraps label in a terminal hyperlink (OSC 8), so a ctrl/cmd-click on it
@@ -21,63 +22,34 @@ func osc8(url, label string) string {
 	return "\x1b]8;;" + url + "\x1b\\" + label + "\x1b]8;;\x1b\\"
 }
 
-// webLinks builds the web app URLs sal points at. The zero value yields no
-// URLs at all, so a renderer constructed without workspace context (tests, the
-// docs reader before login) degrades to plain unlinked text.
+// webLinks is the TUI's view of weblink.Links: the URL knowledge lives in
+// that package because `sal open` needs it too, and this keeps the renderers
+// reading the same way they always have.
 type webLinks struct {
 	server    string
 	workspace string
 }
 
-func (w webLinks) ok() bool { return w.server != "" && w.workspace != "" }
-
-// base is https://host/w/workspace-slug — the prefix every workspace URL shares.
-func (w webLinks) base() string {
-	if !w.ok() {
-		return ""
-	}
-	return strings.TrimRight(w.server, "/") + "/w/" + w.workspace
+func (w webLinks) links() weblink.Links {
+	return weblink.Links{Server: w.server, Workspace: w.workspace}
 }
 
-// channel is a channel's web URL. Threads are first-class channels with their
-// own permalink at /t/:slug; everything else lives under /channels/:slug.
-func (w webLinks) channel(kind, slug string) string {
-	if !w.ok() || slug == "" {
-		return ""
-	}
-	if kind == "thread" {
-		return w.base() + "/t/" + slug
-	}
-	return w.base() + "/channels/" + slug
-}
+func (w webLinks) ok() bool     { return w.links().OK() }
+func (w webLinks) base() string { return w.links().Base() }
 
-// message is the anchored permalink for one message inside its channel.
+func (w webLinks) channel(kind, slug string) string { return w.links().Channel(kind, slug) }
+
 func (w webLinks) message(channelKind, channelSlug string, messageID int64) string {
-	url := w.channel(channelKind, channelSlug)
-	if url == "" {
-		return ""
-	}
-	return fmt.Sprintf("%s#message_%d", url, messageID)
+	return w.links().Message(channelKind, channelSlug, messageID)
 }
 
-func (w webLinks) task(slug string) string {
-	if !w.ok() || slug == "" {
-		return ""
-	}
-	return w.base() + "/tasks/" + slug
-}
+func (w webLinks) task(slug string) string  { return w.links().Task(slug) }
+func (w webLinks) agent(slug string) string { return w.links().Agent(slug) }
 
-func (w webLinks) agent(slug string) string {
-	if !w.ok() || slug == "" {
-		return ""
-	}
-	return w.base() + "/agents/" + slug
-}
-
-// threadSlugPrefix is how the server mints a thread's slug ("thread-" + 8 bytes
-// of hex), which is the only signal an [[channel:…]] reference carries about
-// whether it routes to /t/ or /channels/.
-const threadSlugPrefix = "thread-"
+// threadSlugPrefix is how the server mints a thread's slug, which is the only
+// signal an [[channel:…]] reference carries about whether it routes to /t/ or
+// /channels/.
+const threadSlugPrefix = weblink.ThreadSlugPrefix
 
 // embed resolves the web URL an [[type:slug]] reference points at, or "" when
 // there isn't one to build. Only tasks, channels, and agents have a stable
