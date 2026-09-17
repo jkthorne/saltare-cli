@@ -77,6 +77,8 @@ func main() {
 		err = runTail(args)
 	case "watch":
 		err = runWatch(args)
+	case "status":
+		err = runStatus(args)
 	case "version", "--version", "-v":
 		fmt.Println("sal " + version)
 	case "help", "--help", "-h":
@@ -114,6 +116,8 @@ usage:
   sal tail CHANNEL     stream a channel's messages to stdout
   sal watch            publish unread/mentions/due work to a state file
                             --ndjson --once --no-cable --poll D --state PATH
+  sal status           read that file — no network, no token
+                            --json --waybar --follow --state PATH
   sal search QUERY     search messages, tasks, and documents
                             --type T --channel SLUG --json
   sal docs             list documents          --json
