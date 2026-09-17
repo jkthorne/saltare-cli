@@ -2,11 +2,14 @@ package main
 
 import (
 	"encoding/json"
+	"errors"
 	"os"
 	"strconv"
+	"strings"
 	"testing"
 
 	"github.com/jkthorne/saltare-cli/internal/api"
+	"github.com/jkthorne/saltare-cli/internal/config"
 	"github.com/jkthorne/saltare-cli/internal/watch"
 )
 
@@ -110,5 +113,37 @@ func TestEmitWritesOneJSONObjectPerLine(t *testing.T) {
 	}
 	if got["ev"] != "ready" || got["state"] != "ok" {
 		t.Errorf("got %v", got)
+	}
+}
+
+func TestDegradeTellsARefusalFromAnOutage(t *testing.T) {
+	// Found on the first live run: a workspace at its monthly request cap
+	// reported as "unreachable", which would have the bar telling you to check
+	// a connection that was never the problem.
+	w := &watcher{cfg: &config.Config{ServerURL: "https://saltare.ai"}, seen: map[int64]bool{}}
+
+	w.degrade(&api.APIError{Status: 402, Code: "monthly_limit_reached",
+		Message: "Monthly API request limit reached (0)."})
+	if w.inputs.Session != watch.SessionBlocked {
+		t.Errorf("a server that answered and refused is blocked, got %q", w.inputs.Session)
+	}
+	if !strings.Contains(w.inputs.Error, "Monthly API request limit") {
+		t.Errorf("the server's own sentence is the useful part, got %q", w.inputs.Error)
+	}
+
+	// A 500 is still an answer. "The server errored" beats "check your wifi".
+	w.degrade(&api.APIError{Status: 500, Message: "boom"})
+	if w.inputs.Session != watch.SessionBlocked {
+		t.Errorf("got %q", w.inputs.Session)
+	}
+
+	w.degrade(errors.New("dial tcp: connection refused"))
+	if w.inputs.Session != watch.SessionUnreachable {
+		t.Errorf("nothing answered, so unreachable: got %q", w.inputs.Session)
+	}
+
+	w.degrade(api.ErrAuthExpired)
+	if w.inputs.Session != watch.SessionLoggedOut {
+		t.Errorf("an expired session is terminal: got %q", w.inputs.Session)
 	}
 }

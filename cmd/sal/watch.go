@@ -287,11 +287,21 @@ func (w *watcher) noteNew(notifications []api.Notification) {
 }
 
 // degrade records a failed call without discarding what is already on screen.
-// An expired session is terminal and needs a human; anything else is weather.
+//
+// Three outcomes, and the distinction is the point. An expired session is
+// terminal and needs a human. A server that *answered* and refused — a plan
+// limit, a missing scope, a 500 — is not a connection problem, and reporting
+// it as one sends someone to restart their router. Everything else is weather.
 func (w *watcher) degrade(err error) {
 	if errors.Is(err, api.ErrAuthExpired) {
 		w.inputs.Session = watch.SessionLoggedOut
 		w.inputs.Error = authError(w.cfg, err).Error()
+		return
+	}
+	var apiErr *api.APIError
+	if errors.As(err, &apiErr) {
+		w.inputs.Session = watch.SessionBlocked
+		w.inputs.Error = err.Error()
 		return
 	}
 	w.inputs.Session = watch.SessionUnreachable

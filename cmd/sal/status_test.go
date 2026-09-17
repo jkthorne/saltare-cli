@@ -138,3 +138,21 @@ func TestAgo(t *testing.T) {
 		}
 	}
 }
+
+func TestBlockedOutranksOfflineAndSaysWhatTheServerSaid(t *testing.T) {
+	s := fresh()
+	s.Session = watch.SessionBlocked
+	s.Live = false // a refused request never got a socket either
+	s.Error = "Monthly API request limit reached (0). Upgrade your plan for more requests."
+
+	if got := statusClass(s, time.Now()); got != "blocked" {
+		t.Errorf("want blocked rather than offline, got %q", got)
+	}
+	got := line(s, time.Now())
+	if !strings.Contains(got, "Monthly API request limit") {
+		t.Errorf("the server's sentence is the only thing that says what to do: got %q", got)
+	}
+	if strings.Contains(got, "offline") {
+		t.Errorf("a reachable server must not be called offline: got %q", got)
+	}
+}

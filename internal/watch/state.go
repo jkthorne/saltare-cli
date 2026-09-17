@@ -18,13 +18,18 @@ import (
 // is a bump.
 const Schema = 1
 
-// Session states. A reader distinguishes "you are signed out" (terminal, needs
-// a human) from "the server is unreachable" (transient, the counts on screen
-// are still the last truth).
+// Session states, which exist to keep a reader from misdiagnosing a failure.
+//
+// The line between the last two is whether the server answered. A plan limit,
+// a revoked scope and a 500 are all answers: the network is fine and retrying
+// changes nothing. Calling those "unreachable" sends someone to debug their
+// wifi, which is how this constant came to exist — the first real run of the
+// daemon hit a monthly request cap and the widget blamed the connection.
 const (
 	SessionOK          = "ok"
 	SessionLoggedOut   = "logged-out"
-	SessionUnreachable = "unreachable"
+	SessionUnreachable = "unreachable" // nothing answered: DNS, refused, timeout
+	SessionBlocked     = "blocked"     // the server answered and said no
 )
 
 // Caps. Totals stay exact above them — a popup cannot show more than this, and

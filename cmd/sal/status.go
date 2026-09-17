@@ -110,6 +110,8 @@ func statusClass(s *watch.State, now time.Time) string {
 		return "signin"
 	case s.Stale(now):
 		return "stopped"
+	case s.Session == watch.SessionBlocked:
+		return "blocked"
 	case s.Session == watch.SessionUnreachable || !s.Live:
 		return "offline"
 	case s.Totals.Mentions > 0:
@@ -138,6 +140,10 @@ func line(s *watch.State, now time.Time) string {
 		return strings.Join(append(parts, "signed out — run `sal login`"), " · ")
 	case "stopped":
 		parts = append(parts, "watcher stopped")
+	case "blocked":
+		// The server's own sentence, because it is the only thing here that
+		// says what to do about it.
+		return strings.Join(append(parts, s.Error), " · ")
 	case "offline":
 		parts = append(parts, "offline")
 	}
