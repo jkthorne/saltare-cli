@@ -75,6 +75,8 @@ func main() {
 		err = runAsk(args)
 	case "tail":
 		err = runTail(args)
+	case "watch":
+		err = runWatch(args)
 	case "version", "--version", "-v":
 		fmt.Println("sal " + version)
 	case "help", "--help", "-h":
@@ -110,6 +112,8 @@ usage:
   sal channels         list channels      --json
   sal send CHANNEL MSG post a message (reads stdin when MSG omitted)
   sal tail CHANNEL     stream a channel's messages to stdout
+  sal watch            publish unread/mentions/due work to a state file
+                            --ndjson --once --no-cable --poll D --state PATH
   sal search QUERY     search messages, tasks, and documents
                             --type T --channel SLUG --json
   sal docs             list documents          --json

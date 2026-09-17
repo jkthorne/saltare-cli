@@ -113,7 +113,7 @@ func Reduce(in Inputs) State {
 			mentionedChannels[n.Message.ChannelID] = true
 		}
 		if len(s.Notifications) < MaxNotifications {
-			s.Notifications = append(s.Notifications, convertNotification(n))
+			s.Notifications = append(s.Notifications, ToNotification(n))
 		}
 	}
 
@@ -182,7 +182,9 @@ func Reduce(in Inputs) State {
 	return s
 }
 
-func convertNotification(n api.Notification) Notification {
+// ToNotification is the wire form the document carries. Exported because the
+// daemon announces a single arrival long before it publishes a whole document.
+func ToNotification(n api.Notification) Notification {
 	out := Notification{
 		ID:          n.ID,
 		Action:      n.Action,
