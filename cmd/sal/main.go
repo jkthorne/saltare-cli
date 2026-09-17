@@ -81,6 +81,8 @@ func main() {
 		err = runStatus(args)
 	case "open":
 		err = runOpen(args)
+	case "agents":
+		err = runAgents(args)
 	case "version", "--version", "-v":
 		fmt.Println("sal " + version)
 	case "help", "--help", "-h":
@@ -141,6 +143,8 @@ usage:
   sal tasks complete SLUG   mark a task completed
   sal tasks add TITLE       create a task     --project SLUG --due YYYY-MM-DD --priority P
   sal agenda           your next 7 days of tasks, grouped by day   --days N --json
+  sal agents           list the workspace's agents          --json
+  sal agents message AGENT [MSG]   send to an agent's DM (stdin when MSG omitted)
   sal ask QUESTION     ask Claude, grounded in your workspace via tools
                             --model M (default claude-haiku-4-5) --no-tools
   sal version
