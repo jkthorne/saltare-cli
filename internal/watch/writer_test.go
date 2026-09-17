@@ -157,6 +157,9 @@ func TestGoldenDocument(t *testing.T) {
 		channel(1, "general", 3),
 		channel(2, "engineering", 9),
 		{ID: 3, Slug: "alice-chen", DisplayName: "Alice Chen", Kind: "dm", UnreadCount: ptr(1)},
+		// agent_dm earns its place here: the view guessed this kind was "dm"
+		// and rendered a live bar row as "#DevOps Monitor".
+		{ID: 5, Slug: "agent-dm-2-1-f00b", DisplayName: "Code Reviewer", Kind: "agent_dm", UnreadCount: ptr(4)},
 		channel(4, "quiet", 0),
 	}
 	in.Notifications = []api.Notification{mention(991, 1, "general", "Alice Chen")}

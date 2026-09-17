@@ -17,8 +17,11 @@ func at(s string) time.Time {
 
 func ptr[T any](v T) *T { return &v }
 
+// Kinds are the server's enum (app/models/channel.rb). A fixture that invents
+// one is a fixture that proves nothing — "channel" is not a kind, and using it
+// here is how an agent DM reached a live bar rendered as "#DevOps Monitor".
 func channel(id int64, slug string, unread int) api.Channel {
-	return api.Channel{ID: id, Slug: slug, DisplayName: slug, Kind: "channel", UnreadCount: &unread}
+	return api.Channel{ID: id, Slug: slug, DisplayName: slug, Kind: "public_channel", UnreadCount: &unread}
 }
 
 func mention(id, channelID int64, slug, actor string) api.Notification {

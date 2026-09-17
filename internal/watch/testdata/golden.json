@@ -14,7 +14,7 @@
     "name": "Jack Thorne"
   },
   "totals": {
-    "unread": 13,
+    "unread": 17,
     "mentions": 1,
     "notifications": 1,
     "overdue": 1,
@@ -24,14 +24,21 @@
     {
       "slug": "engineering",
       "title": "engineering",
-      "kind": "channel",
+      "kind": "public_channel",
       "unread": 9,
+      "mentioned": false
+    },
+    {
+      "slug": "agent-dm-2-1-f00b",
+      "title": "Code Reviewer",
+      "kind": "agent_dm",
+      "unread": 4,
       "mentioned": false
     },
     {
       "slug": "general",
       "title": "general",
-      "kind": "channel",
+      "kind": "public_channel",
       "unread": 3,
       "mentioned": true
     },
