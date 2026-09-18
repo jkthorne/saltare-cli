@@ -85,6 +85,18 @@ func goldenCases() []goldenCase {
 			name:     "data_node",
 			unmapped: "sal navigates documents, uploads and databases by their own endpoints, not the data tree",
 		},
+		{
+			name: "contact",
+			// Contacts are a directory of people the workspace knows but does
+			// not employ. sal has no command that reads one, and rubrica is the
+			// client that does — it publishes them into the phone's own address
+			// book, which is not something a terminal has.
+			unmapped: "sal has no contacts command; rubrica is the client for /api/v1/contacts",
+		},
+		{
+			name:     "contact_interaction",
+			unmapped: "the log hangs off a contact, and sal does not read contacts",
+		},
 	}
 }
 

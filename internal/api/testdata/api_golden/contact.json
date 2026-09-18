@@ -1,0 +1,41 @@
+{
+  "id": 225478506,
+  "slug": "ada-lovelace",
+  "name": "Ada Lovelace",
+  "company": "Analytical Engines",
+  "title": "Principal Engineer",
+  "relationship": "prospect",
+  "visibility": "shared",
+  "notes": "Met at the 2026 Turing symposium. Wants a demo of the pipelines.",
+  "addresses": [
+    {
+      "label": "work",
+      "street": "12 Dean Street",
+      "country": "UK",
+      "locality": "London"
+    }
+  ],
+  "identities": [
+    {
+      "id": 135878930,
+      "kind": "email",
+      "label": "work",
+      "value": "Ada@Analytical.CO",
+      "normalized_value": "ada@analytical.co",
+      "preferred": true
+    },
+    {
+      "id": 734311101,
+      "kind": "phone",
+      "label": "mobile",
+      "value": "+39 333 123 4567",
+      "normalized_value": "+393331234567",
+      "preferred": false
+    }
+  ],
+  "user_id": null,
+  "archived_at": null,
+  "last_interaction_at": "2026-09-17T06:48:56.000Z",
+  "created_at": "2026-09-18T06:48:56.662Z",
+  "updated_at": "2026-09-18T06:48:56.662Z"
+}
