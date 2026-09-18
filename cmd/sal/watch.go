@@ -49,6 +49,11 @@ const defaultPoll = 5 * time.Minute
 // keep the rare thing fresh.
 const taskInterval = 30 * time.Minute
 
+// mailInterval matches taskInterval for the same reason: an inbox count is a
+// number you glance at, not one you watch. Mail has no cable events either, so
+// the poll is the only clock it has.
+const mailInterval = 30 * time.Minute
+
 func runWatch(args []string) error {
 	fs := flag.NewFlagSet("watch", flag.ExitOnError)
 	statePath := fs.String("state", "", "state file (default $XDG_STATE_HOME/saltare/watch.json)")
@@ -159,6 +164,11 @@ type watcher struct {
 	// lastTasks is when the task list was last fetched. Zero means never, so
 	// the first resync always gets one.
 	lastTasks time.Time
+
+	// lastMail is the same clock for mailboxes; mailDenied is set once, when
+	// the server says this session has no mail:read, and never asks again.
+	lastMail   time.Time
+	mailDenied bool
 }
 
 // subscribeKnown tells the socket about every channel the store now holds.
@@ -288,9 +298,39 @@ func (w *watcher) resync(ctx context.Context) {
 		w.lastTasks = now
 	}
 
+	w.resyncMail(ctx)
+
 	w.recover()
 	w.subscribeKnown()
 	w.noteNew(notifications)
+}
+
+// resyncMail refetches the connected mailboxes, and is the one input allowed
+// to fail without taking the document with it.
+//
+// Two reasons, and they are different. A `missing_scope` 403 means this
+// session was minted before mail:read joined the CLI grant — not a workspace
+// problem and not a network one, just a reader that cannot see mail. The
+// section goes absent and the question is never asked again, because it has
+// been answered. Anything else is a mail outage, and calling the whole session
+// blocked over one secondary feed would hide the unread counts that *did*
+// arrive behind a banner about something else.
+func (w *watcher) resyncMail(ctx context.Context) {
+	if w.mailDenied {
+		return
+	}
+	if now := time.Now(); now.Sub(w.lastMail) >= mailInterval {
+		boxes, err := w.client.Mailboxes(ctx)
+		var apiErr *api.APIError
+		switch {
+		case err == nil:
+			w.inputs.Mail = boxes
+			w.lastMail = now
+		case errors.As(err, &apiErr) && apiErr.Code == "missing_scope":
+			w.mailDenied = true
+			w.inputs.Mail = nil
+		}
+	}
 }
 
 // pollNotifications is the cheap half of resync, for when the socket has told
@@ -390,6 +430,7 @@ func (w *watcher) publish() error {
 			"unread": state.Totals.Unread, "mentions": state.Totals.Mentions,
 			"notifications": state.Totals.Notifications,
 			"overdue":       state.Totals.Overdue, "due_today": state.Totals.DueToday,
+			"mail": state.Totals.Mail,
 		})
 	}
 	return nil

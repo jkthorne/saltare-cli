@@ -30,6 +30,11 @@ type Inputs struct {
 
 	Notifications []api.Notification // unread only, newest first
 	Tasks         []api.Task         // the caller's tasks; Reduce drops the finished ones
+
+	// Mail is nil for a reader that cannot see mail at all — no mail:read, or
+	// no connected account — and Reduce keeps that distinction by leaving
+	// State.Mail nil rather than making it an empty list.
+	Mail []api.Mailbox
 }
 
 // mentionActions are the notification kinds that make a channel worth looking
@@ -177,6 +182,27 @@ func Reduce(in Inputs) State {
 	})
 	sort.SliceStable(s.Work.Today, func(i, j int) bool {
 		return s.Work.Today[i].Slug < s.Work.Today[j].Slug
+	})
+
+	for _, m := range in.Mail {
+		inbox := m.Inbox()
+		s.Totals.Mail += inbox.Unread
+		if len(s.Mail) >= MaxMailboxes {
+			continue
+		}
+		box := Mailbox{Slug: m.Slug, Name: m.Name(), Address: m.Address, Unread: inbox.Unread}
+		if m.LastError != nil {
+			box.Error = *m.LastError
+		}
+		s.Mail = append(s.Mail, box)
+	}
+	// Busiest first, then by address, for the same reason the channels sort
+	// that way: a list that reorders between writes repaints for nothing.
+	sort.SliceStable(s.Mail, func(i, j int) bool {
+		if s.Mail[i].Unread != s.Mail[j].Unread {
+			return s.Mail[i].Unread > s.Mail[j].Unread
+		}
+		return s.Mail[i].Address < s.Mail[j].Address
 	})
 
 	return s

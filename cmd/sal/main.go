@@ -118,7 +118,7 @@ usage:
   sal channels         list channels      --json
   sal send CHANNEL MSG post a message (reads stdin when MSG omitted)
   sal tail CHANNEL     stream a channel's messages to stdout
-  sal watch            publish unread/mentions/due work to a state file
+  sal watch            publish unread/mentions/due work/mail to a state file
                             --ndjson --once --no-cable --poll D --state PATH
                             --notify --notify-all   desktop notifications
                             --install-service / --uninstall-service (systemd)

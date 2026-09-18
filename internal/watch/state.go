@@ -39,6 +39,7 @@ const (
 	MaxChannels      = 20
 	MaxNotifications = 20
 	MaxTasks         = 10
+	MaxMailboxes     = 5
 )
 
 // HeartbeatSec is how often the daemon touches the file when nothing changed,
@@ -61,7 +62,11 @@ type State struct {
 	Channels      []Channel      `json:"channels"`
 	Notifications []Notification `json:"notifications"`
 	Work          Work           `json:"work"`
-	Error         string         `json:"error"`
+	// Mail is absent, not empty, for a reader without mail:read — see
+	// Totals.Mail. A section that renders "0 unread" for a capability the
+	// session does not have is worse than no section.
+	Mail  []Mailbox `json:"mail"`
+	Error string    `json:"error"`
 }
 
 type Workspace struct {
@@ -82,6 +87,10 @@ type Totals struct {
 	Notifications int `json:"notifications"`
 	Overdue       int `json:"overdue"`
 	DueToday      int `json:"due_today"`
+	// Mail counts inboxes only, and it is deliberately outside the badge's
+	// sum: unread mail is a thing to read, not a thing addressed to you, and
+	// a bar number that conflates the two is one you stop trusting.
+	Mail int `json:"mail"`
 }
 
 // Channel carries no "#" on its title: the prefix is a rendering decision, and
@@ -112,6 +121,20 @@ type Notification struct {
 type Work struct {
 	Overdue []Task `json:"overdue"`
 	Today   []Task `json:"today"`
+}
+
+// Mailbox is one connected account, reduced to what a row draws. The folder
+// list the API carries stays on the daemon's side of the seam: a bar popup
+// shows an inbox, and everything else is posta's job.
+type Mailbox struct {
+	Slug    string `json:"slug"`
+	Name    string `json:"name"`
+	Address string `json:"address"`
+	Unread  int    `json:"unread"`
+	// Error is the provider's own complaint, already a sentence. A mailbox
+	// that stopped syncing still shows its last count, the way a stopped
+	// watcher does — struck through rather than dropped.
+	Error string `json:"error"`
 }
 
 type Task struct {

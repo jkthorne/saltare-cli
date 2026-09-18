@@ -160,6 +160,12 @@ func line(s *watch.State, now time.Time) string {
 	if s.Totals.DueToday > 0 {
 		parts = append(parts, fmt.Sprintf("%d due today", s.Totals.DueToday))
 	}
+	// Mail is named rather than folded into "unread": the two numbers come
+	// from different places and a reader who sees one number wants to know
+	// which inbox it is talking about.
+	if s.Totals.Mail > 0 {
+		parts = append(parts, fmt.Sprintf("%d mail", s.Totals.Mail))
+	}
 	if len(parts) == 1 || (len(parts) == 0) {
 		parts = append(parts, "all clear")
 	}

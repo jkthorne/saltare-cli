@@ -1,0 +1,32 @@
+{
+  "id": 275060550,
+  "message_id": "<invoice-001@example.com>",
+  "in_reply_to": null,
+  "references": [],
+  "mailbox_slug": "ada-example-com",
+  "folder": "INBOX",
+  "subject": "Invoice for March",
+  "from": {
+    "address": "bob@example.com",
+    "name": "Bob Reilly"
+  },
+  "to": [
+    {
+      "address": "ada@example.com",
+      "name": "Ada Lovelace"
+    }
+  ],
+  "cc": [],
+  "bcc": [],
+  "reply_to": [],
+  "sent_at": "2026-09-11T11:23:23.000Z",
+  "read": false,
+  "flagged": false,
+  "answered": false,
+  "draft": false,
+  "size_bytes": 4096,
+  "attachment_count": 1,
+  "body_format": "plain",
+  "body": "Hello Ada,\n\nThe invoice for March is attached. Let me know if the hours look wrong.\n\n— Bob\n",
+  "body_truncated": false
+}

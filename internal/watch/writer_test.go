@@ -215,6 +215,16 @@ func TestGoldenDocument(t *testing.T) {
 		{Slug: "fix-deploy", Title: "Fix the deploy", State: "open", DueDate: ptr("2026-09-14")},
 		{Slug: "ship-plugin", Title: "Ship the Omarchy plugin", State: "in_progress", DueDate: ptr("2026-09-16")},
 	}
+	// Folders other than the inbox are in the golden on purpose: the view must
+	// see a document where summing them would give a different, wrong number.
+	in.Mail = []api.Mailbox{{
+		Slug: "ada-example-com", Address: "ada@example.com", DisplayName: "Ada Lovelace",
+		Provider: "gmail", Status: "active",
+		Folders: []api.MailFolder{
+			{Path: "INBOX", Name: "Inbox", Total: 12, Unread: 2},
+			{Path: "Trash", Name: "Trash", Total: 4, Unread: 3},
+		},
+	}}
 
 	body, err := json.MarshalIndent(Reduce(in), "", "  ")
 	if err != nil {

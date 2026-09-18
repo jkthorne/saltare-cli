@@ -1,0 +1,12 @@
+{
+  "path": "docs/q4-report",
+  "name": "Q4 Report",
+  "node_type": "upload",
+  "content_slug": "q4-report",
+  "content_type": "application/pdf",
+  "category": "pdf",
+  "file_size": 245760,
+  "has_children": false,
+  "created_at": "2026-09-14T11:11:09.556Z",
+  "updated_at": "2026-09-14T11:11:09.556Z"
+}

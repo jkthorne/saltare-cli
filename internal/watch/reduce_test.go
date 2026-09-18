@@ -1,6 +1,7 @@
 package watch
 
 import (
+	"fmt"
 	"testing"
 	"time"
 
@@ -195,5 +196,98 @@ func TestPersonalActionsAreTheDefaultToastSet(t *testing.T) {
 		if IsPersonal(action) {
 			t.Errorf("%s belongs in the workspace, not on top of what you were doing", action)
 		}
+	}
+}
+
+func TestMailCountsTheInboxAndNothingElse(t *testing.T) {
+	// The golden mailbox has one unread in INBOX and one in Trash. A count
+	// that summed folders would say two things are waiting for you, and one of
+	// them is a thing you already threw away.
+	s := Reduce(Inputs{Now: time.Now(), Mail: []api.Mailbox{{
+		Slug: "ada-example-com", Address: "ada@example.com", DisplayName: "Ada Lovelace",
+		Folders: []api.MailFolder{
+			{Path: "INBOX", Name: "Inbox", Total: 2, Unread: 1},
+			{Path: "Trash", Name: "Trash", Total: 1, Unread: 1},
+		},
+	}}})
+
+	if s.Totals.Mail != 1 {
+		t.Errorf("mail total counts folders other than the inbox: got %d, want 1", s.Totals.Mail)
+	}
+	if len(s.Mail) != 1 {
+		t.Fatalf("want one mailbox, got %d", len(s.Mail))
+	}
+	if s.Mail[0].Name != "Ada Lovelace" {
+		t.Errorf("a row calls the account by its display name: got %q", s.Mail[0].Name)
+	}
+	if s.Mail[0].Unread != 1 {
+		t.Errorf("mailbox unread: got %d, want 1", s.Mail[0].Unread)
+	}
+}
+
+func TestMailIsAbsentRatherThanEmptyForAReaderWithoutIt(t *testing.T) {
+	// nil and [] are different answers. A session with no mail:read cannot see
+	// mail at all; a session that can see mail and has none connected is a
+	// different fact, and a widget that drew "0 unread" for the first would be
+	// inventing an inbox.
+	s := Reduce(Inputs{Now: time.Now()})
+	if s.Mail != nil {
+		t.Errorf("no mail input should leave State.Mail nil, got %#v", s.Mail)
+	}
+	// The lists that always exist still do — a reader iterating them needs no
+	// nil check, and that asymmetry is the signal.
+	if s.Channels == nil || s.Notifications == nil {
+		t.Error("channels and notifications are always lists, even when empty")
+	}
+}
+
+func TestAMailboxWithNoInboxFallsBackRatherThanReportingZero(t *testing.T) {
+	// A provider sync replaces the folder list wholesale, so "INBOX" is a
+	// convention, not a guarantee.
+	s := Reduce(Inputs{Now: time.Now(), Mail: []api.Mailbox{{
+		Slug: "work", Address: "j@example.com",
+		Folders: []api.MailFolder{{Path: "Posteingang", Name: "Posteingang", Unread: 4}},
+	}}})
+	if s.Totals.Mail != 4 {
+		t.Errorf("want the only folder's count, got %d", s.Totals.Mail)
+	}
+	if s.Mail[0].Name != "j@example.com" {
+		t.Errorf("without a display name the address is the label, got %q", s.Mail[0].Name)
+	}
+}
+
+func TestMailboxesSortBusiestFirst(t *testing.T) {
+	box := func(addr string, unread int) api.Mailbox {
+		return api.Mailbox{Slug: addr, Address: addr,
+			Folders: []api.MailFolder{{Path: "INBOX", Unread: unread}}}
+	}
+	s := Reduce(Inputs{Now: time.Now(), Mail: []api.Mailbox{
+		box("b@example.com", 1), box("c@example.com", 9), box("a@example.com", 1),
+	}})
+	got := []string{s.Mail[0].Address, s.Mail[1].Address, s.Mail[2].Address}
+	want := []string{"c@example.com", "a@example.com", "b@example.com"}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("mail order: got %v, want %v", got, want)
+		}
+	}
+	if s.Totals.Mail != 11 {
+		t.Errorf("the total is exact across every account: got %d, want 11", s.Totals.Mail)
+	}
+}
+
+func TestMailTotalStaysExactPastTheListCap(t *testing.T) {
+	var boxes []api.Mailbox
+	for i := 0; i < MaxMailboxes+3; i++ {
+		addr := fmt.Sprintf("a%02d@example.com", i)
+		boxes = append(boxes, api.Mailbox{Slug: addr, Address: addr,
+			Folders: []api.MailFolder{{Path: "INBOX", Unread: 2}}})
+	}
+	s := Reduce(Inputs{Now: time.Now(), Mail: boxes})
+	if len(s.Mail) != MaxMailboxes {
+		t.Errorf("list cap: got %d rows, want %d", len(s.Mail), MaxMailboxes)
+	}
+	if want := 2 * (MaxMailboxes + 3); s.Totals.Mail != want {
+		t.Errorf("the badge must not lie because the list was capped: got %d, want %d", s.Totals.Mail, want)
 	}
 }

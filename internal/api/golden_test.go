@@ -67,8 +67,23 @@ func goldenCases() []goldenCase {
 			optional: []string{"download_url"},
 		},
 		{
+			name:   "mailbox",
+			target: &Mailbox{},
+			// MailboxSerializer emits last_synced_at and the timestamps; the
+			// daemon needs an address, a status and folder counts, and posta
+			// owns everything else about a mailbox.
+		},
+		{
 			name:     "member",
 			unmapped: "sal reads the workspace directory through /mentionables, not /members",
+		},
+		{
+			name:     "mail_message",
+			unmapped: "sal counts mail, it does not read it — that is posta's surface",
+		},
+		{
+			name:     "data_node",
+			unmapped: "sal navigates documents, uploads and databases by their own endpoints, not the data tree",
 		},
 	}
 }

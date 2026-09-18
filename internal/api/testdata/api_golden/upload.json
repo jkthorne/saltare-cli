@@ -6,7 +6,9 @@
   "content_type": "application/pdf",
   "category": "pdf",
   "file_size": 245760,
+  "extraction_state": "pending",
+  "extraction_error": null,
   "creator_id": 980190962,
-  "created_at": "2026-09-10T07:33:47.081Z",
-  "updated_at": "2026-09-10T07:33:47.081Z"
+  "created_at": "2026-09-14T10:47:05.402Z",
+  "updated_at": "2026-09-14T10:47:05.402Z"
 }

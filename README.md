@@ -94,7 +94,7 @@ go build -o sal ./cmd/sal
 | `sal agents` | List the workspace's agents (`--json`) |
 | `sal agents message AGENT [MSG]` | Send to an agent's DM (reads stdin when MSG omitted) |
 | `sal open KIND SLUG` | Open a channel, task, agent or message in the browser (`--print`) |
-| `sal watch` | Publish unread, mentions and due work to a state file — see below |
+| `sal watch` | Publish unread, mentions, due work and mail to a state file — see below |
 | `sal status` | Read that file. No network, no token (`--json`, `--waybar`, `--follow`) |
 | `sal version` | Print the version |
 
@@ -111,11 +111,19 @@ sal watch --install-service    # systemd user unit, starts on login
 sal watch --notify             # desktop toasts for mentions and DMs
 ```
 
+**Mail is the one input that can be missing.** It needs `mail:read`, which
+joined the CLI grant after most sessions were minted, and rotation copies a
+session's old scopes — so a signed-in user gets a `missing_scope` 403 until
+they re-run `sal login`. The daemon reads that as *this reader has no mail*:
+the section is absent, the rest of the document is unaffected, and it stops
+asking. Counting is inbox-only; fifty unread in Spam is not fifty things
+waiting for you.
+
 **It costs API requests, and the budget is small.** The websocket is free — it
 never reaches the usage gate — but the backstop poll is metered. Two requests
-every five minutes plus a task refresh every thirty is about **18,700 a
-month**, which is a third of what the Pro plan includes and more than a starter
-workspace gets in total. `--poll` tunes it; the first version of this used a
+every five minutes, plus a task refresh and a mailbox refresh every thirty, is
+about **20,200 a month**, which is two fifths of what the Pro plan includes and
+more than a starter workspace gets in total. `--poll` tunes it; the first version of this used a
 one-minute poll and spent 129,600 a month idling, which was two and a half
 times everything Pro includes.
 

@@ -3,6 +3,8 @@ package main
 import (
 	"encoding/json"
 	"errors"
+	"net/http"
+	"net/http/httptest"
 	"os"
 	"strconv"
 	"strings"
@@ -225,7 +227,9 @@ func TestTheIdleBudgetFitsInsideThePlanItTargets(t *testing.T) {
 	const proMonthlyRequests = 50_000
 	const daysPerMonth = 30
 
-	perDay := 2*(24*time.Hour/defaultPoll) + 1*(24*time.Hour/taskInterval)
+	// Two per poll (channels, notifications), plus tasks and mailboxes on
+	// their own slower clocks.
+	perDay := 2*(24*time.Hour/defaultPoll) + 1*(24*time.Hour/taskInterval) + 1*(24*time.Hour/mailInterval)
 	perMonth := int(perDay) * daysPerMonth
 
 	if perMonth >= proMonthlyRequests {
@@ -235,5 +239,107 @@ func TestTheIdleBudgetFitsInsideThePlanItTargets(t *testing.T) {
 	if share := float64(perMonth) / proMonthlyRequests; share > 0.5 {
 		t.Errorf("an idle watcher is %.0f%% of a Pro workspace's monthly budget; keep it under half",
 			share*100)
+	}
+}
+
+// mailServer answers /api/v1/mail/mailboxes with one canned response and
+// counts how often it was asked.
+func mailServer(t *testing.T, status int, body string) (*api.Client, *int) {
+	t.Helper()
+	calls := 0
+	srv := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.URL.Path != "/api/v1/mail/mailboxes" {
+			t.Errorf("unexpected request: %s", r.URL.Path)
+		}
+		calls++
+		w.Header().Set("Content-Type", "application/json")
+		w.WriteHeader(status)
+		_, _ = w.Write([]byte(body))
+	}))
+	t.Cleanup(srv.Close)
+
+	client, err := api.New(srv.URL, config.Tokens{AccessToken: "sk_sal_test"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return client, &calls
+}
+
+func TestASessionWithoutMailReadLosesTheSectionAndNothingElse(t *testing.T) {
+	// mail:read joined the CLI grant after the sessions that are already out
+	// there. Rotation copies a session's old scopes, so a signed-in user keeps
+	// getting a 403 forever — and treating that as a workspace failure would
+	// put a red banner over the unread counts that arrived perfectly well.
+	client, calls := mailServer(t, http.StatusForbidden,
+		`{"error":{"code":"missing_scope","message":"mail:read required","scope":"mail:read"}}`)
+	w := &watcher{client: client, seen: map[int64]bool{}}
+	w.inputs.Session = watch.SessionOK
+
+	w.resyncMail(t.Context())
+
+	if w.inputs.Session != watch.SessionOK {
+		t.Errorf("a missing scope is not a broken session: got %q", w.inputs.Session)
+	}
+	if w.inputs.Error != "" {
+		t.Errorf("nothing to report to the user: got %q", w.inputs.Error)
+	}
+	if w.inputs.Mail != nil {
+		t.Errorf("no mail means no section, got %#v", w.inputs.Mail)
+	}
+	if !w.mailDenied {
+		t.Error("the answer should be remembered")
+	}
+
+	// And never asked again: the question has an answer, and it costs a
+	// metered request to re-ask it every half hour for the life of the daemon.
+	w.resyncMail(t.Context())
+	if *calls != 1 {
+		t.Errorf("asked %d times after being told no once", *calls)
+	}
+}
+
+func TestAMailOutageLeavesTheRestOfTheDocumentAlone(t *testing.T) {
+	// Unlike a missing scope this is worth retrying, and unlike a channels
+	// failure it must not degrade the session: the counts that did arrive are
+	// still true, and a banner about mail would hide them.
+	client, calls := mailServer(t, http.StatusInternalServerError,
+		`{"error":{"code":"internal","message":"boom"}}`)
+	w := &watcher{client: client, seen: map[int64]bool{}}
+	w.inputs.Session = watch.SessionOK
+
+	w.resyncMail(t.Context())
+
+	if w.inputs.Session != watch.SessionOK {
+		t.Errorf("a mail outage is not a session state: got %q", w.inputs.Session)
+	}
+	if w.mailDenied {
+		t.Error("a 500 is weather, not an answer — it must be retried")
+	}
+	if !w.lastMail.IsZero() {
+		t.Error("a failed fetch should not start the hold-off clock")
+	}
+
+	w.resyncMail(t.Context())
+	if *calls != 2 {
+		t.Errorf("asked %d times, want 2 — an outage is worth another try", *calls)
+	}
+}
+
+func TestMailboxesReduceIntoTheDocument(t *testing.T) {
+	client, _ := mailServer(t, http.StatusOK, `{"data":[{
+		"slug":"ada-example-com","address":"ada@example.com","display_name":"Ada Lovelace",
+		"provider":"gmail","status":"active","last_error":null,
+		"folders":[{"path":"INBOX","name":"Inbox","total":9,"unread":4},
+		           {"path":"Spam","name":"Spam","total":50,"unread":50}]}]}`)
+	w := &watcher{client: client, seen: map[int64]bool{}}
+
+	w.resyncMail(t.Context())
+
+	state := watch.Reduce(w.inputs)
+	if state.Totals.Mail != 4 {
+		t.Errorf("fifty unread in Spam is not fifty things waiting: got %d, want 4", state.Totals.Mail)
+	}
+	if len(state.Mail) != 1 || state.Mail[0].Name != "Ada Lovelace" {
+		t.Errorf("mail rows: %#v", state.Mail)
 	}
 }

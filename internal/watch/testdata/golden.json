@@ -18,7 +18,8 @@
     "mentions": 1,
     "notifications": 1,
     "overdue": 1,
-    "due_today": 1
+    "due_today": 1,
+    "mail": 2
   },
   "channels": [
     {
@@ -81,5 +82,14 @@
       }
     ]
   },
+  "mail": [
+    {
+      "slug": "ada-example-com",
+      "name": "Ada Lovelace",
+      "address": "ada@example.com",
+      "unread": 2,
+      "error": ""
+    }
+  ],
   "error": ""
 }

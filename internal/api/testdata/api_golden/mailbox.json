@@ -1,0 +1,49 @@
+{
+  "slug": "ada-example-com",
+  "address": "ada@example.com",
+  "display_name": "Ada Lovelace",
+  "provider": "gmail",
+  "status": "active",
+  "last_error": null,
+  "last_synced_at": null,
+  "folders": [
+    {
+      "path": "INBOX",
+      "name": "Inbox",
+      "total": 2,
+      "unread": 1
+    },
+    {
+      "path": "Drafts",
+      "name": "Drafts",
+      "total": 0,
+      "unread": 0
+    },
+    {
+      "path": "Sent",
+      "name": "Sent",
+      "total": 1,
+      "unread": 0
+    },
+    {
+      "path": "Archive",
+      "name": "Archive",
+      "total": 0,
+      "unread": 0
+    },
+    {
+      "path": "Spam",
+      "name": "Spam",
+      "total": 0,
+      "unread": 0
+    },
+    {
+      "path": "Trash",
+      "name": "Trash",
+      "total": 1,
+      "unread": 1
+    }
+  ],
+  "created_at": "2026-09-14T11:23:24.358Z",
+  "updated_at": "2026-09-14T11:23:24.358Z"
+}
